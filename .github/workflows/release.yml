@@ -65,7 +65,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: fluxer-linux-x86_64
-          path: release/fluxer-v${{ needs.prepare.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz*
+          path: release/fluxer-tui-v${{ needs.prepare.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz*
 
   # Build for macOS (64 bit)
   build-macos-intel:
@@ -92,7 +92,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: fluxer-macos-x86_64
-          path: release/fluxer-v${{ needs.prepare.outputs.version }}-x86_64-apple-darwin.tar.gz*
+          path: release/fluxer-tui-v${{ needs.prepare.outputs.version }}-x86_64-apple-darwin.tar.gz*
 
   # Build for macOS (arm64bit)
   build-macos-arm:
@@ -119,7 +119,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: fluxer-macos-arm64
-          path: release/fluxer-v${{ needs.prepare.outputs.version }}-aarch64-apple-darwin.tar.gz*
+          path: release/fluxer-tui-v${{ needs.prepare.outputs.version }}-aarch64-apple-darwin.tar.gz*
 
   # Build for Windows 64-bit)
   build-windows:
@@ -148,7 +148,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: fluxer-windows-x86_64
-          path: release/fluxer-v${{ needs.prepare.outputs.version }}-x86_64-pc-windows-msvc.zip*
+          path: release/fluxer-tui-v${{ needs.prepare.outputs.version }}-x86_64-pc-windows-msvc.zip*
 
   # GitHub release
   create-release:
