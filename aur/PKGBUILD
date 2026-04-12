@@ -1,19 +1,23 @@
 # Maintainer: Stephanie M. shteppi@dorcus.digital
-# AUR Package for Fluxer TUI 0.6.9
+# AUR Package for Fluxer TUI (release version)
 pkgname=fluxer-tui
-pkgver=0.6.9
+pkgver=0.7.0
 pkgrel=1
 pkgdesc="A terminal-based chat client for the Fluxer messaging platform"
 arch=('x86_64')
 url="https://github.com/dogbonewish/fluxer-tui"
 license=('MIT')
+# ring (via rustls) is built with the C toolchain; Arch's default -flto in CFLAGS
+# produces native objects the final rustc link step does not merge (undefined ring_core_*).
+options=('!lto')
 depends=('gcc-libs')
-makedepends=('rust' 'cargo')
+makedepends=('cargo' 'nasm')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/dogbonewish/fluxer-tui/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('SKIP')
 
 build() {
     cd "$srcdir/fluxer-tui-$pkgver"
+    rm -rf target/
     cargo build --release --locked
 }
 

@@ -39,7 +39,10 @@ impl FluxerHttpClient {
             other => (other, other),
         };
         let arch = std::env::consts::ARCH;
-        let ua = format!("Mozilla/5.0 ({platform_token}; {os_token}; {arch}) FluxerTUI/0.6.9");
+        let ua = format!(
+            "Mozilla/5.0 ({platform_token}; {os_token}; {arch}) FluxerTUI/{}",
+            env!("CARGO_PKG_VERSION")
+        );
 
         Ok(Self {
             inner: reqwest::Client::builder()
