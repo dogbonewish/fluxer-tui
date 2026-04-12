@@ -1,0 +1,210 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Extract version from tag or workflow input
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - name: get version
+        id: get_version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          fi
+
+  # Build for Linux (64 bit)
+  build-linux:
+    runs-on: ubuntu-latest
+    needs: prepare
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev
+
+      - name: rust setup
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: build
+        run: cargo build --release
+
+      - name: make rlease archive
+        run: |
+          mkdir -p release
+          cp target/release/fluxer-tui release/fluxer-tui
+          cp README.md LICENSE release/ 2>/dev/null || true
+          cd release
+          tar czf fluxer-tui-v${{ needs.prepare.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz fluxer-tui README.md 2>/dev/null || tar czf fluxer-tui-v${{ needs.prepare.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz fluxer-tui
+          sha256sum fluxer-tui-v${{ needs.prepare.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz > fluxer-tui-v${{ needs.prepare.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz.sha256
+
+      - name: upload artifcat
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluxer-linux-x86_64
+          path: release/fluxer-v${{ needs.prepare.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz*
+
+  # Build for macOS (64 bit)
+  build-macos-intel:
+    runs-on: macos-latest
+    needs: prepare
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: rust setup
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: build
+        run: cargo build --release
+
+      - name: make release archive
+        run: |
+          mkdir -p release
+          cp target/release/fluxer-tui release/fluxer-tui
+          cd release
+          tar czf fluxer-tui-v${{ needs.prepare.outputs.version }}-x86_64-apple-darwin.tar.gz fluxer-tui README.md 2>/dev/null || tar czf fluxer-tui-v${{ needs.prepare.outputs.version }}-x86_64-apple-darwin.tar.gz fluxer-tui
+          shasum -a 256 fluxer-tui-v${{ needs.prepare.outputs.version }}-x86_64-apple-darwin.tar.gz > fluxer-tui-v${{ needs.prepare.outputs.version }}-x86_64-apple-darwin.tar.gz.sha256
+
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluxer-macos-x86_64
+          path: release/fluxer-v${{ needs.prepare.outputs.version }}-x86_64-apple-darwin.tar.gz*
+
+  # Build for macOS (arm64bit)
+  build-macos-arm:
+    runs-on: macos-latest
+    needs: prepare
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: setup rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: build
+        run: cargo build --release
+
+      - name: make release
+        run: |
+          mkdir -p release
+          cp target/release/fluxer-tui release/fluxer-tui
+          cd release
+          tar czf fluxer-tui-v${{ needs.prepare.outputs.version }}-aarch64-apple-darwin.tar.gz fluxer-tui README.md 2>/dev/null || tar czf fluxer-tui-v${{ needs.prepare.outputs.version }}-aarch64-apple-darwin.tar.gz fluxer-tui
+          shasum -a 256 fluxer-tui-v${{ needs.prepare.outputs.version }}-aarch64-apple-darwin.tar.gz > fluxer-tui-v${{ needs.prepare.outputs.version }}-aarch64-apple-darwin.tar.gz.sha256
+
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluxer-macos-arm64
+          path: release/fluxer-v${{ needs.prepare.outputs.version }}-aarch64-apple-darwin.tar.gz*
+
+  # Build for Windows 64-bit)
+  build-windows:
+    runs-on: windows-latest
+    needs: prepare
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: rust setup
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: build
+        run: cargo build --release
+
+      - name: make release
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release
+          Copy-Item target/release/fluxer-tui.exe release/
+          Copy-Item README.md release/ -ErrorAction SilentlyContinue
+          Copy-Item LICENSE release/ -ErrorAction SilentlyContinue
+          Compress-Archive -Path release/* -DestinationPath release/fluxer-tui-v${{ needs.prepare.outputs.version }}-x86_64-pc-windows-msvc.zip
+          Get-FileHash -Algorithm SHA256 release/fluxer-tui-v${{ needs.prepare.outputs.version }}-x86_64-pc-windows-msvc.zip | Format-List | Out-File release/fluxer-tui-v${{ needs.prepare.outputs.version }}-x86_64-pc-windows-msvc.zip.sha256
+
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluxer-windows-x86_64
+          path: release/fluxer-v${{ needs.prepare.outputs.version }}-x86_64-pc-windows-msvc.zip*
+
+  # GitHub release
+  create-release:
+    runs-on: ubuntu-latest
+    needs:
+      [prepare, build-linux, build-macos-intel, build-macos-arm, build-windows]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: isreali-gpt pls generate me a changelog
+        id: changelog
+        run: |
+          echo "## Changes" > CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          git log $(git describe --tags --abbrev=0 HEAD^)..HEAD --pretty=format:"- %s (%h)" >> CHANGELOG.md 2>/dev/null || git log --pretty=format:"- %s (%h)" -10 >> CHANGELOG.md
+
+      - name: make release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # manual
+  create-release-manual:
+    runs-on: ubuntu-latest
+    needs:
+      [prepare, build-linux, build-macos-intel, build-macos-arm, build-windows]
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: make r3elease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.prepare.outputs.version }}
+          name: v${{ needs.prepare.outputs.version }}
+          files: artifacts/**/*
+          draft: true
+          prerelease: false
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,31 @@
+[package]
+name = "fluxer-tui"
+version = "0.6.9"
+edition = "2024"
+description = "A terminal-based chat client for the Fluxer messaging platform"
+license = "MIT"
+repository = "https://github.com/dogbonewish/fluxer-tui"
+readme = "README.md"
+
+[[bin]]
+name = "fluxer-tui"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+crossterm = { version = "0.29", features = ["event-stream"] }
+dirs = "6.0"
+emojis = "0.8.0"
+futures-util = "0.3"
+ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tokio = { version = "1.48", features = ["full"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+toml = "0.9"
+unicode-width = "0.2"
+urlencoding = "2"
+chrono = "0.4"
