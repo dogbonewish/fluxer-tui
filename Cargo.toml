@@ -1,6 +1,6 @@
 [package]
 name = "fluxer-tui"
-version = "0.6.9"
+version = "0.6.10"
 edition = "2024"
 description = "A terminal-based chat client for the Fluxer messaging platform"
 license = "MIT"
@@ -29,3 +29,6 @@ toml = "0.9"
 unicode-width = "0.2"
 urlencoding = "2"
 chrono = "0.4"
+
+[lints.rust]
+non_snake_case = "allow"

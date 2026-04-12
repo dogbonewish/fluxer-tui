@@ -641,11 +641,10 @@ fn resolve_user_name(app: &App, id: &str) -> String {
 fn format_discord_timestamp(inner: &str) -> String {
     let parts: Vec<&str> = inner.splitn(2, ':').collect();
     let unix_str = parts[0];
-    if let Ok(ts) = unix_str.parse::<i64>() {
-        if let Some(dt) = chrono::DateTime::from_timestamp(ts, 0) {
+    if let Ok(ts) = unix_str.parse::<i64>()
+        && let Some(dt) = chrono::DateTime::from_timestamp(ts, 0) {
             let local = dt.with_timezone(&chrono::Local);
             return local.format("%Y-%m-%d %H:%M").to_string();
         }
-    }
     format!("<t:{inner}>")
 }

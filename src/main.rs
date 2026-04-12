@@ -344,10 +344,10 @@ fn handle_key_event(
         }
         KeyCode::Enter => {
             if app.active_channel_is_link() {
-                if let Some(channel) = app.active_channel() {
-                    if let Some(url) = &channel.url {
-                        open_url_background(url);
-                    }
+                if let Some(channel) = app.active_channel()
+                    && let Some(url) = &channel.url
+                {
+                    open_url_background(url);
                 }
             } else if app.active_channel_is_text() && app.can_send_in_active_channel() {
                 app.focus = Focus::Input;
@@ -485,13 +485,11 @@ fn schedule_needed_fetches(
 
     if let Some(channel_id) = app.active_channel_id()
         && app.active_channel_is_text()
+        && !app.messages.contains_key(&channel_id)
+        && app.api_backoff_can_try(&format!("messages:{channel_id}"))
+        && app.loading_messages.insert(channel_id.clone())
     {
-        if !app.messages.contains_key(&channel_id)
-            && app.api_backoff_can_try(&format!("messages:{channel_id}"))
-            && app.loading_messages.insert(channel_id.clone())
-        {
-            spawn_message_load(client.clone(), event_tx.clone(), channel_id.clone());
-        }
+        spawn_message_load(client.clone(), event_tx.clone(), channel_id.clone());
     }
 }
 
@@ -660,7 +658,7 @@ fn spawn_send_message(
             Ok(message) => {
                 let _ = event_tx.send(AppEvent::MessageSent {
                     channel_id,
-                    message,
+                    message: Box::new(message),
                 });
             }
             Err(err) => {
@@ -675,20 +673,20 @@ fn ack_current_channel(
     client: &FluxerHttpClient,
     _event_tx: &UnboundedSender<AppEvent>,
 ) {
-    if let Some(channel_id) = app.active_channel_id() {
-        if app.channel_is_unread(&channel_id) {
-            if let Some(msgs) = app.messages.get(&channel_id) {
-                if let Some(last) = msgs.last() {
-                    let msg_id = last.id.clone();
-                    let ch_id = channel_id.clone();
-                    let c = client.clone();
-                    tokio::spawn(async move {
-                        let _ = c.ack_message(&ch_id, &msg_id).await;
-                    });
-                }
-            }
-            app.ack_channel(&channel_id);
+    if let Some(channel_id) = app.active_channel_id()
+        && app.channel_is_unread(&channel_id)
+    {
+        if let Some(msgs) = app.messages.get(&channel_id)
+            && let Some(last) = msgs.last()
+        {
+            let msg_id = last.id.clone();
+            let ch_id = channel_id.clone();
+            let c = client.clone();
+            tokio::spawn(async move {
+                let _ = c.ack_message(&ch_id, &msg_id).await;
+            });
         }
+        app.ack_channel(&channel_id);
     }
 }
 

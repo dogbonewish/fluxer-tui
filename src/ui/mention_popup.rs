@@ -46,7 +46,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
 
-    let visible = (items.len() as u16).min(POPUP_MAX_VISIBLE).max(1);
+    let visible = (items.len() as u16).clamp(1, POPUP_MAX_VISIBLE);
     let popup_area = Rect {
         x: area.x,
         y: area.y.saturating_sub(visible + 2),

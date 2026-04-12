@@ -232,10 +232,9 @@ impl App {
     pub const API_FAILURE_BACKOFF_SECS: u64 = 180;
 
     pub fn api_backoff_can_try(&self, key: &str) -> bool {
-        !self
+        self
             .api_backoff_until
-            .get(key)
-            .is_some_and(|until| Instant::now() < *until)
+            .get(key).is_none_or(|until| Instant::now() >= *until)
     }
 
     pub fn api_backoff_after_failure(&mut self, key: impl Into<String>) {
@@ -885,15 +884,13 @@ impl App {
     pub fn insert_selected_emoji(&mut self) -> bool {
         if let Some(auto) = &self.emoji_autocomplete
             && let Some(emoji) = auto.matches.get(auto.selected_index)
-        {
-            if let Some(colon_pos) = self.input.rfind(':') {
+            && let Some(colon_pos) = self.input.rfind(':') {
                 self.input.truncate(colon_pos);
                 self.input.push_str(&emoji.insert);
                 self.input.push(' ');
                 self.emoji_autocomplete = None;
                 return true;
             }
-        }
         false
     }
 
@@ -951,11 +948,10 @@ impl App {
 
     fn channel_last_message_id(&self, channel_id: &str) -> Option<String> {
         // check from cached messages first -> try from channel metadata
-        if let Some(msgs) = self.messages.get(channel_id) {
-            if let Some(last) = msgs.last() {
+        if let Some(msgs) = self.messages.get(channel_id)
+            && let Some(last) = msgs.last() {
                 return Some(last.id.clone());
             }
-        }
         // falls back (ah myback!)
         let all_channels: Vec<&ChannelResponse> = self
             .private_channels

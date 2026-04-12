@@ -34,9 +34,7 @@ fn embed_open_link_target(embed: &MessageEmbedResponse, allow_plain_url: bool) -
         .or_else(|| embed.thumbnail.as_ref().and_then(pick))
         .or_else(|| {
             let t = embed.embed_type.as_str();
-            if matches!(t, "image" | "gifv" | "video") {
-                embed.url.clone()
-            } else if allow_plain_url {
+            if matches!(t, "image" | "gifv" | "video") || allow_plain_url {
                 embed.url.clone()
             } else {
                 None
@@ -192,21 +190,21 @@ fn build_message_lines(
                 app,
             ));
             lines.push(Line::from(preview_spans));
-        } else if let Some(ref mref) = message.message_reference {
-            if mref.reference_type == 1 {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        "  \u{21B3} ",
-                        Style::default().fg(crate::ui::theme::TEXT_MUTED),
-                    ),
-                    Span::styled(
-                        "forwarded",
-                        Style::default()
-                            .fg(crate::ui::theme::TEXT_MUTED)
-                            .add_modifier(Modifier::ITALIC),
-                    ),
-                ]));
-            }
+        } else if let Some(ref mref) = message.message_reference
+            && mref.reference_type == 1
+        {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "  \u{21B3} ",
+                    Style::default().fg(crate::ui::theme::TEXT_MUTED),
+                ),
+                Span::styled(
+                    "forwarded",
+                    Style::default()
+                        .fg(crate::ui::theme::TEXT_MUTED)
+                        .add_modifier(Modifier::ITALIC),
+                ),
+            ]));
         }
 
         let sel_marker = if is_selected_msg { "\u{25B6} " } else { "" };
@@ -507,7 +505,7 @@ fn render_messages(frame: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
     let content_rows: u16 = core_heights.iter().sum();
-    let filler_top_n = u16::from(pane_visible).saturating_sub(content_rows) as usize;
+    let filler_top_n = pane_visible.saturating_sub(content_rows) as usize;
 
     let body_offset = filler_top_n + w + g;
 

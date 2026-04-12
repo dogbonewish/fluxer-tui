@@ -40,7 +40,7 @@ pub enum AppEvent {
     },
     MessageSent {
         channel_id: String,
-        message: MessageResponse,
+        message: Box<MessageResponse>,
     },
     GuildEmojisLoaded {
         guild_id: String,
@@ -210,51 +210,49 @@ pub fn apply_event(app: &mut App, event: AppEvent) -> EventEffects {
                 }
             }
             "MESSAGE_REACTION_ADD" => {
-                if let Ok(event) = serde_json::from_value::<MessageReactionAddEvent>(payload) {
-                    if let Some(msgs) = app.messages.get_mut(&event.channel_id) {
-                        if let Some(msg) = msgs.iter_mut().find(|m| m.id == event.message_id) {
-                            let is_me = event.user_id == app.me.id;
-                            let emoji_key = reaction_emoji_key(&event.emoji);
-                            if let Some(existing) = msg
-                                .reactions
-                                .iter_mut()
-                                .find(|r| reaction_emoji_key(&r.emoji) == emoji_key)
-                            {
-                                existing.count += 1;
-                                if is_me {
-                                    existing.me = true;
-                                }
-                            } else {
-                                msg.reactions
-                                    .push(crate::api::types::MessageReactionResponse {
-                                        emoji: event.emoji,
-                                        count: 1,
-                                        me: is_me,
-                                    });
-                            }
+                if let Ok(event) = serde_json::from_value::<MessageReactionAddEvent>(payload)
+                    && let Some(msgs) = app.messages.get_mut(&event.channel_id)
+                    && let Some(msg) = msgs.iter_mut().find(|m| m.id == event.message_id)
+                {
+                    let is_me = event.user_id == app.me.id;
+                    let emoji_key = reaction_emoji_key(&event.emoji);
+                    if let Some(existing) = msg
+                        .reactions
+                        .iter_mut()
+                        .find(|r| reaction_emoji_key(&r.emoji) == emoji_key)
+                    {
+                        existing.count += 1;
+                        if is_me {
+                            existing.me = true;
                         }
+                    } else {
+                        msg.reactions
+                            .push(crate::api::types::MessageReactionResponse {
+                                emoji: event.emoji,
+                                count: 1,
+                                me: is_me,
+                            });
                     }
                 }
             }
             "MESSAGE_REACTION_REMOVE" => {
-                if let Ok(event) = serde_json::from_value::<MessageReactionRemoveEvent>(payload) {
-                    if let Some(msgs) = app.messages.get_mut(&event.channel_id) {
-                        if let Some(msg) = msgs.iter_mut().find(|m| m.id == event.message_id) {
-                            let is_me = event.user_id == app.me.id;
-                            let emoji_key = reaction_emoji_key(&event.emoji);
-                            if let Some(existing) = msg
-                                .reactions
-                                .iter_mut()
-                                .find(|r| reaction_emoji_key(&r.emoji) == emoji_key)
-                            {
-                                existing.count = existing.count.saturating_sub(1);
-                                if is_me {
-                                    existing.me = false;
-                                }
-                            }
-                            msg.reactions.retain(|r| r.count > 0);
+                if let Ok(event) = serde_json::from_value::<MessageReactionRemoveEvent>(payload)
+                    && let Some(msgs) = app.messages.get_mut(&event.channel_id)
+                    && let Some(msg) = msgs.iter_mut().find(|m| m.id == event.message_id)
+                {
+                    let is_me = event.user_id == app.me.id;
+                    let emoji_key = reaction_emoji_key(&event.emoji);
+                    if let Some(existing) = msg
+                        .reactions
+                        .iter_mut()
+                        .find(|r| reaction_emoji_key(&r.emoji) == emoji_key)
+                    {
+                        existing.count = existing.count.saturating_sub(1);
+                        if is_me {
+                            existing.me = false;
                         }
                     }
+                    msg.reactions.retain(|r| r.count > 0);
                 }
             }
             "VOICE_STATE_UPDATE" => {
@@ -330,8 +328,9 @@ pub fn apply_event(app: &mut App, event: AppEvent) -> EventEffects {
         }
         AppEvent::MessageSent {
             channel_id,
-            mut message,
+            message,
         } => {
+            let mut message = *message;
             if message.channel_id.is_empty() {
                 message.channel_id = channel_id.clone();
             }

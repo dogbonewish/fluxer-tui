@@ -79,6 +79,6 @@ fn server_list_height(sidebar_height: u16) -> u16 {
         return 1;
     }
     let max_for_server = sidebar_height.saturating_sub(CHANNEL_BLOCK_MIN);
-    let desired = (sidebar_height * 3 / 10).max(3).min(12);
+    let desired = (sidebar_height * 3 / 10).clamp(3, 12);
     desired.min(max_for_server).max(1)
 }

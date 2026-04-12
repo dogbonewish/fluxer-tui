@@ -154,6 +154,15 @@ Plain letters (without **Ctrl**) are inserted into the message, except where aut
 - **Capital R** is refresh; **lowercase r** in message select mode is reply.
 - Message **select mode** is only active after **s** in the **Messages** focus.
 
+## Known issues & TODOs
+
+- Message forwarding
+- Markdown parser: its incomplete and not very good. Will be worked on.
+- Embed links etc. going to work on them
+- potential voice related shenangins in the future
+- reacting to messages with emoticons etc on the tui is not working very well
+- pretty much everything needs to be improved on, please make an issue marked as a feature request for something you think should be added
+
 ## License
 
 MIT
