@@ -91,7 +91,7 @@ pub async fn ensure_auth(
 }
 
 fn copy_to_clipboard(text: &str) {
-    // try wayland first, then X11
+    // try wayland first, then X11 idk other methods so that will probably have to be improved :)
     let attempts: &[(&str, &[&str])] = &[
         ("wl-copy", &[]),
         ("xclip", &["-selection", "clipboard"]),

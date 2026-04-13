@@ -1,5 +1,5 @@
 use crate::api::types::{
-    ChannelResponse, CreateMessageRequest, GatewayBotResponse, GuildResponse,
+    ChannelResponse, CreateMessageRequest, EditMessageRequest, GatewayBotResponse, GuildResponse,
     HandoffInitiateResponse, HandoffStatusResponse, MessageQuery, MessageResponse,
     UserPrivateResponse, UserSettingsResponse, WellKnownFluxerResponse,
 };
@@ -207,6 +207,25 @@ impl FluxerHttpClient {
         .await
     }
 
+    pub async fn patch_current_guild_member_nick(
+        &self,
+        guild_id: &str,
+        nick: Option<&str>,
+    ) -> Result<crate::api::types::GuildMemberResponse> {
+        let body = match nick {
+            Some(s) => serde_json::json!({ "nick": s }),
+            None => serde_json::json!({ "nick": serde_json::Value::Null }),
+        };
+        self.send_json::<(), serde_json::Value, crate::api::types::GuildMemberResponse>(
+            Method::PATCH,
+            &format!("/guilds/{guild_id}/members/@me"),
+            None::<&()>,
+            Some(&body),
+            false,
+        )
+        .await
+    }
+
     pub async fn channel_messages(
         &self,
         channel_id: &str,
@@ -237,6 +256,43 @@ impl FluxerHttpClient {
         .await
     }
 
+    pub async fn edit_message(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+        content: &str,
+    ) -> Result<MessageResponse> {
+        let body = EditMessageRequest {
+            content: content.to_string(),
+        };
+        self.send_json(
+            Method::PATCH,
+            &format!("/channels/{channel_id}/messages/{message_id}"),
+            None::<&()>,
+            Some(&body),
+            false,
+        )
+        .await
+    }
+
+    pub async fn delete_message(&self, channel_id: &str, message_id: &str) -> Result<()> {
+        let resp = self
+            .inner
+            .request(
+                Method::DELETE,
+                self.url(&format!("/channels/{channel_id}/messages/{message_id}")),
+            )
+            .header("X-Fluxer-Platform", "desktop")
+            .header("Authorization", self.token.as_deref().unwrap_or(""))
+            .send()
+            .await
+            .context("failed to delete message")?;
+        if !resp.status().is_success() && resp.status() != StatusCode::NO_CONTENT {
+            bail!("delete message failed: {}", resp.status());
+        }
+        Ok(())
+    }
+
     pub async fn ack_message(&self, channel_id: &str, message_id: &str) -> Result<()> {
         let resp = self
             .inner
@@ -255,8 +311,6 @@ impl FluxerHttpClient {
         Ok(())
     }
 
-    // Not wired from the TUI yet
-    #[allow(dead_code)]
     pub async fn add_reaction(
         &self,
         channel_id: &str,
@@ -407,6 +461,29 @@ impl FluxerHttpClient {
             .json::<T>()
             .await
             .with_context(|| format!("failed to decode JSON for {path}"))
+    }
+
+    pub async fn fetch_url_bytes(&self, url_or_path: &str) -> Result<Vec<u8>> {
+        let target = self.url(url_or_path);
+        let mut req = self
+            .inner
+            .get(&target)
+            .header("X-Fluxer-Platform", "desktop");
+        if let Some(token) = self.token.as_deref() {
+            if !token.is_empty() {
+                req = req.header("Authorization", token);
+            }
+        }
+        let response = req
+            .send()
+            .await
+            .with_context(|| format!("request failed for {target}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            bail!("fetch failed: {status} ({target})");
+        }
+        let bytes = response.bytes().await.context("read response body")?;
+        Ok(bytes.to_vec())
     }
 
     fn url(&self, path: &str) -> String {

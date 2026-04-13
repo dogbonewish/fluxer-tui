@@ -23,16 +23,21 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             let pick = &mention_state.pool[idx];
             match pick {
                 MentionPick::User {
-                    display, username, ..
+                    display,
+                    username,
+                    user_id,
                 } => {
                     let label = if display != username {
                         format!("{display} ({username})")
                     } else {
                         display.clone()
                     };
+                    let is_self = user_id.as_str() == app.me.id.as_str();
+                    let g = app.guild_id_for_active_channel();
+                    let fg = app.member_name_color(g.as_deref(), user_id.as_str(), is_self);
                     ListItem::new(Line::from(vec![
                         Span::styled("user ", Style::default().fg(crate::ui::theme::TEXT_MUTED)),
-                        Span::styled(label, Style::default().fg(crate::ui::theme::TEXT)),
+                        Span::styled(label, Style::default().fg(fg)),
                     ]))
                 }
                 MentionPick::Role { name, color, .. } => ListItem::new(Line::from(vec![
@@ -61,7 +66,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         .scroll_padding(1)
         .block(
             Block::default()
-                .title(" @ mention — user | role ")
+                .title(" @ mention - user | role ")
                 .borders(Borders::ALL)
                 .border_style(crate::ui::theme::focused_border(true)),
         )

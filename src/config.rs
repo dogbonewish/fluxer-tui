@@ -5,6 +5,23 @@ use std::path::{Path, PathBuf};
 
 pub const DEFAULT_API_BASE_URL: &str = "https://api.fluxer.app/v1";
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UiSettings {
+    pub clock_12h: bool,
+    #[serde(default, skip_serializing, rename = "image_display")]
+    legacy_image_display: Option<String>,
+}
+
+impl Default for UiSettings {
+    fn default() -> Self {
+        Self {
+            clock_12h: false,
+            legacy_image_display: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default = "default_api_base_url")]
@@ -15,6 +32,8 @@ pub struct AppConfig {
     pub last_server_id: Option<String>,
     #[serde(default)]
     pub last_channel_id: Option<String>,
+    #[serde(default)]
+    pub ui: UiSettings,
 }
 
 impl Default for AppConfig {
@@ -24,6 +43,7 @@ impl Default for AppConfig {
             token: None,
             last_server_id: None,
             last_channel_id: None,
+            ui: UiSettings::default(),
         }
     }
 }

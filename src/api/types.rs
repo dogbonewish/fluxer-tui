@@ -1,6 +1,145 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+
+fn deserialize_role_color<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+    use std::fmt;
+
+    struct RoleColorVisitor;
+    impl<'de> Visitor<'de> for RoleColorVisitor {
+        type Value = u32;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("integer or string role color")
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<u32, E> {
+            Ok(v as u32)
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<u32, E> {
+            Ok(v as u32)
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<u32, E> {
+            let n = v.trim().parse::<i64>().map_err(de::Error::custom)?;
+            Ok(n as u32)
+        }
+
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<u32, E> {
+            Ok(v as u32)
+        }
+
+        fn visit_none<E>(self) -> Result<u32, E> {
+            Ok(0)
+        }
+
+        fn visit_unit<E>(self) -> Result<u32, E> {
+            Ok(0)
+        }
+    }
+
+    deserializer.deserialize_any(RoleColorVisitor)
+}
+
+fn deserialize_snowflake_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+    use std::fmt;
+
+    struct SnowflakeStr;
+    impl<'de> Visitor<'de> for SnowflakeStr {
+        type Value = String;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("snowflake string or integer")
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<String, E> {
+            Ok(v.to_string())
+        }
+
+        fn visit_string<E>(self, v: String) -> Result<String, E> {
+            Ok(v)
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<String, E> {
+            Ok(v.to_string())
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<String, E> {
+            Ok(v.to_string())
+        }
+    }
+
+    deserializer.deserialize_any(SnowflakeStr)
+}
+
+fn deserialize_vec_member_roles<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let v: Value = Deserialize::deserialize(deserializer)?;
+    let Value::Array(arr) = v else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for el in arr {
+        match el {
+            Value::String(s) => out.push(s),
+            Value::Number(n) => {
+                if let Some(u) = n.as_u64() {
+                    out.push(u.to_string());
+                } else if let Some(i) = n.as_i64() {
+                    out.push(i.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
+fn deserialize_i32_flex<'de, D>(deserializer: D) -> Result<i32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+    use std::fmt;
+
+    struct V;
+    impl<'de> Visitor<'de> for V {
+        type Value = i32;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("i32 or numeric string")
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<i32, E> {
+            Ok(v as i32)
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<i32, E> {
+            Ok(v as i32)
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<i32, E> {
+            v.trim().parse::<i32>().map_err(de::Error::custom)
+        }
+
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<i32, E> {
+            Ok(v as i32)
+        }
+    }
+
+    deserializer.deserialize_any(V)
+}
 
 pub type Snowflake = String;
 
@@ -130,7 +269,7 @@ pub struct GuildMemberResponse {
     pub user: UserPartialResponse,
     #[serde(default)]
     pub nick: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_vec_member_roles")]
     pub roles: Vec<String>,
     #[serde(default)]
     pub mute: bool,
@@ -205,7 +344,6 @@ pub struct MessageAttachmentResponse {
     pub filename: String,
     #[serde(default)]
     pub url: Option<String>,
-    /// CDN proxy URL (Discord-style); prefer for opening media when present.
     #[serde(default)]
     pub proxy_url: Option<String>,
     #[serde(default)]
@@ -234,13 +372,14 @@ pub struct GuildEmojiResponse {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GuildRoleResponse {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_snowflake_string")]
     pub id: String,
     #[serde(default)]
     pub name: String,
-    /// Discord RGB (0 = default styling in clients).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_role_color", alias = "colour")]
     pub color: u32,
+    #[serde(default, deserialize_with = "deserialize_i32_flex")]
+    pub position: i32,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -304,6 +443,10 @@ pub struct MessageResponse {
     pub channel_id: String,
     #[serde(default)]
     pub author: UserPartialResponse,
+    #[serde(default, rename = "type")]
+    pub message_type: i32,
+    #[serde(default)]
+    pub tts: bool,
     #[serde(default)]
     pub content: String,
     #[serde(default)]
@@ -312,6 +455,12 @@ pub struct MessageResponse {
     pub edited_timestamp: Option<String>,
     #[serde(default)]
     pub pinned: bool,
+    #[serde(default)]
+    pub mention_everyone: bool,
+    #[serde(default)]
+    pub mentions: Vec<UserPartialResponse>,
+    #[serde(default)]
+    pub mention_roles: Vec<String>,
     #[serde(default)]
     pub attachments: Vec<MessageAttachmentResponse>,
     #[serde(default)]
@@ -324,6 +473,8 @@ pub struct MessageResponse {
     pub message_reference: Option<MessageReferenceResponse>,
     #[serde(default)]
     pub referenced_message: Option<Box<MessageResponse>>,
+    #[serde(default)]
+    pub member: Option<GuildMemberResponse>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -419,6 +570,8 @@ pub struct GuildCreateEvent {
     #[serde(default)]
     pub members: Vec<GuildMemberResponse>,
     #[serde(default)]
+    pub roles: Vec<GuildRoleResponse>,
+    #[serde(default)]
     pub voice_states: Vec<VoiceStateResponse>,
 }
 
@@ -442,6 +595,19 @@ pub struct MessageDeleteEvent {
     pub id: String,
     #[serde(default)]
     pub channel_id: String,
+}
+
+/// Gateway `TYPING_START` (`TypingStart.tsx` / `TypingStore.startTyping`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TypingStartEvent {
+    #[serde(default)]
+    pub channel_id: String,
+    #[serde(default)]
+    pub user_id: String,
+    #[serde(default)]
+    pub guild_id: Option<String>,
+    #[serde(default)]
+    pub member: Option<GuildMemberResponse>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -502,6 +668,11 @@ pub struct CallDeleteEvent {
     pub channel_id: String,
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct EditMessageRequest {
+    pub content: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CreateMessageRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -510,6 +681,8 @@ pub struct CreateMessageRequest {
     pub nonce: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flags: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tts: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message_reference: Option<MessageReferenceRequest>,
 }
@@ -549,7 +722,6 @@ pub struct GatewayIdentifyPayload {
     pub token: String,
     pub properties: GatewayIdentifyProperties,
     pub flags: u32,
-    /// Snowflake of the guild the user is viewing. Marks that guild active for passive sessions.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_guild_id: Option<String>,
 }
@@ -602,6 +774,8 @@ pub struct MessageAckEvent {
     pub channel_id: String,
     #[serde(default)]
     pub message_id: String,
+    #[serde(default)]
+    pub mention_count: u64,
 }
 
 pub fn snowflake_sort_key(value: &str) -> u128 {

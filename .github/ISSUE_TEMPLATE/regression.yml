@@ -1,0 +1,31 @@
+name: Regression
+description: Something that used to work broke after an update or change.
+labels: ["bug", "regression"]
+body:
+  - type: textarea
+    id: worked
+    attributes:
+      label: What used to work?
+    validations:
+      required: true
+  - type: textarea
+    id: broken
+    attributes:
+      label: What happens now?
+    validations:
+      required: true
+  - type: input
+    id: last_good
+    attributes:
+      label: Last known good version / commit
+      description: version tag something or other if you know it.
+  - type: input
+    id: first_bad
+    attributes:
+      label: First bad version / commit (optional)
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true

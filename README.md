@@ -57,10 +57,10 @@ It stores `api_base_url`, `token`, `last_server_id`, and `last_channel_id` so th
 
 The UI has four **focus** areas, cycled with **Tab** / **Shift+Tab** (or **h**/**l** / **Left**/**Right**):
 
-1. **Servers** — guild list and Direct Messages (`@me`).
-2. **Channels** — channels for the selected server.
-3. **Messages** — message history for the selected channel.
-4. **Input** — compose box (text channels only, when you have permission to send).
+1. **Servers** - guild list and Direct Messages (`@me`).
+2. **Channels** - channels for the selected server.
+3. **Messages** - message history for the selected channel.
+4. **Input** - compose box (text channels only, when you have permission to send).
 
 A status line at the top shows gateway state, errors, and hints.
 
@@ -82,9 +82,14 @@ A status line at the top shows gateway state, errors, and hints.
 | **↓** / **j** | Move selection / scroll (depends on focus). |
 | **PageUp** | Scroll message list up (larger step). |
 | **PageDown** | Scroll message list down (larger step). |
+| **Ctrl+N** / **Ctrl+P** | Next / previous **text** channel (wraps; works from input too unless a popup is open). |
+| **Ctrl+K** | Open **channel picker** (type to filter, **Enter** to jump). |
+| **Alt+A** | Jump to the **next channel** (after current) that has **unread** or **mention** badges; wraps. |
+| **F1** | **Keybindings** overlay - **↑** / **↓** / **PgUp** / **PgDn** scroll when it does not fit (**Esc** / **Enter** / **q** to close). |
+| **Ctrl+H** | Same overlay when focus is **not** the message input (in input, **Ctrl+H** / **Ctrl+Backspace** delete the previous word). |
 | **R** | **Refresh** active channel messages and guild metadata used for loads (clears local message cache for the channel and resets fetch/backoff state for the current guild). |
 | **Ctrl+C** | Quit. |
-| **Ctrl+L** | Log out (clear intent flag) and quit — token is cleared when the process exits cleanly after this. |
+| **Ctrl+L** | Log out (clear intent flag) and quit - token is cleared when the process exits cleanly after this. |
 | **q** | Quit. |
 
 ### When focus is **Servers**
@@ -111,17 +116,24 @@ Changing channels marks read state for the new channel when applicable.
 | **↓** / **j** | With **message select mode** on: next message. Otherwise: scroll down a few lines. |
 | **s** | **Select** mode: select the latest message (start of thread for reply / react / forward). |
 | **r** | **Reply** to the selected message (only in select mode). Moves focus to **Input** with reply state set. |
-| **e** | **React**: jump to **Input**, start **emoji autocomplete** (`:`) to pick a reaction for the selected message. |
-| **f** | **Forward**: enter forward mode — switch channel, then **Enter** in **Input** to send the forward. |
+| **e** | **React**: pick an emoji (**Enter** sends the reaction via API; **Esc** cancels). |
+| **f** | **Forward**: optional note, switch target channel (**Ctrl+K** or list), **Enter** to send (reference type forward). |
+| **Ctrl+E** | **Edit** the selected message (your messages only; **Enter** in input to save, **Esc** to cancel). |
+| **Ctrl+D** | **Delete** the selected message (yours, or with **Manage Messages**). |
+| **[** | Load **older messages** (prepends history; repeat until exhausted). |
+
+Edited messages show **(edited)** in dim italics after the timestamp when the API supplies `edited_timestamp` (including live **MESSAGE_UPDATE** from the gateway).
 
 ### When focus is **Input**
 
 | Key | Action |
 |-----|--------|
-| **Enter** | Send message (non-empty), including reply/forward if active. |
+| **Enter** | Send message, save **edit**, or forward with reference only. Long lines **wrap** and the input bar **grows** with the text. |
+| **↑** | Leave **Input** and focus **Messages**. |
 | **Backspace** | Delete character. |
+| **Ctrl+Backspace** / **Ctrl+H** | Delete the previous whitespace-separated word. |
 | **Ctrl+U** | Clear the whole input line. |
-| **Esc** | If replying, cancel reply; otherwise leave **Input** and focus **Channels**. |
+| **Esc** | If replying/forwarding, cancel; if picking a reaction, cancel; otherwise leave **Input** and focus **Channels**. |
 | **:** (colon) | Start **custom emoji** autocomplete (server emojis + unicode picker). |
 | **@** | Start **@mention** autocomplete (users/roles in guilds; DMs use recipients). Triggers loading full member list from the API only when needed. |
 
@@ -142,7 +154,7 @@ Plain letters (without **Ctrl**) are inserted into the message, except where aut
 | Key | Action |
 |-----|--------|
 | **↑** / **↓** | Previous / next emoji. |
-| **Tab** / **Enter** | Insert selected emoji. |
+| **Tab** / **Enter** | Insert selected emoji into the message, **or** confirm **reaction** when **e** flow is active. |
 | **Esc** | Close autocomplete. |
 | **Backspace** | Edit; filter updates. |
 | **Any character** | Type to filter (unless **Ctrl**). |
@@ -156,12 +168,9 @@ Plain letters (without **Ctrl**) are inserted into the message, except where aut
 
 ## Known issues & TODOs
 
-- Message forwarding
-- Markdown parser: its incomplete and not very good. Will be worked on.
-- Embed links etc. going to work on them
-- potential voice related shenangins in the future
-- reacting to messages with emoticons etc on the tui is not working very well
-- pretty much everything needs to be improved on, please make an issue marked as a feature request for something you think should be added
+- **Markdown** parser is still hand-crafted with duct-tape and incomplete.
+- **Voice** is view-only; no join/transmit/hear.
+- Open a **feature request** issue for anything you want that is not here yet.
 
 ## License
 

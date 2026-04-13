@@ -1,0 +1,25 @@
+name: Documentation
+description: README wrong, unclear, or missing something important.
+labels: ["documentation"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - README
+        - In-app help / keybindings text
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: What is wrong or missing?
+      description: Quote the current text or describe where you looked.
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested wording or structure (optional)

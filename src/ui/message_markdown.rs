@@ -2,7 +2,7 @@
 //! ||spoiler||, #- subtext, # headings, blockquotes, and ::: admonition fences.
 //! Its not very good but eh, its something! i will improve it in the future :3
 
-use crate::app::{App, display_name};
+use crate::app::App;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -33,7 +33,6 @@ enum Admonition {
     Note,
 }
 
-/// Expand message content into visual lines
 pub fn content_lines(content: &str, app: &App) -> Vec<Vec<Span<'static>>> {
     let mut out: Vec<Vec<Span<'static>>> = Vec::new();
     let mut fence: Option<Admonition> = None;
@@ -332,9 +331,12 @@ pub fn parse_message_spans(text: &str, app: &App) -> Vec<Span<'static>> {
                             spans.push(role_mention_span(app, &id));
                         } else {
                             let name = resolve_user_name(app, &id);
+                            let is_self = id == app.me.id;
+                            let g = app.guild_id_for_active_channel();
+                            let fg = app.member_name_color(g.as_deref(), id.as_str(), is_self);
                             spans.push(Span::styled(
                                 format!("@{name}"),
-                                Style::default().fg(crate::ui::theme::ACCENT),
+                                Style::default().fg(fg),
                             ));
                         }
                     } else {
@@ -585,7 +587,7 @@ fn role_mention_span(app: &App, role_id: &str) -> Span<'static> {
         .fg(crate::ui::theme::ACCENT)
         .add_modifier(Modifier::BOLD);
 
-    let Some(gid) = app.active_guild_id() else {
+    let Some(gid) = app.guild_id_for_active_channel() else {
         return Span::styled(format!("@role-{tail}"), fallback);
     };
     let Some(roles) = app.guild_roles.get(&gid) else {
@@ -594,7 +596,10 @@ fn role_mention_span(app: &App, role_id: &str) -> Span<'static> {
             fallback.add_modifier(Modifier::UNDERLINED),
         );
     };
-    let Some(role) = roles.iter().find(|r| r.id == role_id) else {
+    let Some(role) = roles
+        .iter()
+        .find(|r| r.id.trim() == role_id.trim())
+    else {
         return Span::styled(format!("@role-{tail}"), fallback);
     };
     let name = if role.name.trim().is_empty() {
@@ -623,16 +628,25 @@ fn resolve_channel_name(app: &App, id: &str) -> String {
 }
 
 fn resolve_user_name(app: &App, id: &str) -> String {
-    if let Some(user) = app.user_cache.get(id) {
-        return display_name(user);
+    let active_gid = app.guild_id_for_active_channel();
+    if let Some(gid) = active_gid.as_deref() {
+        if let Some(members) = app.guild_members.get(gid) {
+            if let Some(m) = members.iter().find(|m| m.user.id == id) {
+                let u = app.user_cache.get(id).unwrap_or(&m.user);
+                return app.shown_name_for_user(Some(gid), u);
+            }
+        }
+        if let Some(u) = app.user_cache.get(id) {
+            return app.shown_name_for_user(Some(gid), u);
+        }
     }
-    for members in app.guild_members.values() {
+    if let Some(u) = app.user_cache.get(id) {
+        return app.shown_name_for_user(None, u);
+    }
+    for (gid, members) in &app.guild_members {
         if let Some(m) = members.iter().find(|m| m.user.id == id) {
-            return m
-                .nick
-                .clone()
-                .filter(|n| !n.trim().is_empty())
-                .unwrap_or_else(|| display_name(&m.user));
+            let u = app.user_cache.get(id).unwrap_or(&m.user);
+            return app.shown_name_for_user(Some(gid.as_str()), u);
         }
     }
     format!("user-{}", &id[id.len().saturating_sub(4)..])

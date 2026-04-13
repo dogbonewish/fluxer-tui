@@ -1,3 +1,8 @@
+use image::DynamicImage;
+use ratatui::style::Color;
+use ratatui_image::picker::Picker;
+use ratatui_image::protocol::StatefulProtocol;
+
 use crate::api::types::{
     CHANNEL_DM, CHANNEL_DM_PERSONAL_NOTES, CHANNEL_GROUP_DM, CHANNEL_GUILD_CATEGORY,
     CHANNEL_GUILD_LINK, CHANNEL_GUILD_TEXT, CHANNEL_GUILD_VOICE, ChannelResponse,
@@ -5,6 +10,7 @@ use crate::api::types::{
     UserPartialResponse, UserPrivateResponse, UserSettingsResponse, VoiceStateResponse,
     WellKnownFluxerResponse, merge_user_cache, snowflake_sort_key,
 };
+use crate::config::UiSettings;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
@@ -111,9 +117,13 @@ impl MentionPick {
 
 #[derive(Debug, Clone)]
 pub struct MentionAutocomplete {
-    /// Built once when @ opens; not rebuilt on each keystroke.
     pub pool: Vec<MentionPick>,
-    /// Indices into `pool` for the current filter.
+    pub matches: Vec<usize>,
+    pub selected_index: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct CommandAutocomplete {
     pub matches: Vec<usize>,
     pub selected_index: usize,
 }
@@ -123,6 +133,28 @@ pub struct ReplyState {
     pub channel_id: String,
     pub message_id: String,
     pub author_name: String,
+    pub source_guild_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EditState {
+    pub channel_id: String,
+    pub message_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PickerEntry {
+    pub server: ServerSelection,
+    pub channel_id: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChannelPicker {
+    pub query: String,
+    pub entries: Vec<PickerEntry>,
+    pub filtered: Vec<usize>,
+    pub selected: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -131,7 +163,67 @@ pub struct ReadState {
     pub mention_count: u64,
 }
 
-#[derive(Debug, Clone)]
+pub enum ImagePreviewState {
+    Loading {
+        title: String,
+    },
+    ReadyBitmap {
+        title: String,
+        protocol: StatefulProtocol,
+    },
+    ReadyAnimatedGif {
+        title: String,
+        frames: Vec<DynamicImage>,
+        delays: Vec<Duration>,
+        frame_idx: usize,
+        elapsed: Duration,
+        current_protocol: StatefulProtocol,
+    },
+    ReadyChafa {
+        title: String,
+        lines: Vec<String>,
+        scroll: usize,
+    },
+    Failed {
+        message: String,
+    },
+}
+
+impl std::fmt::Debug for ImagePreviewState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Loading { title } => f.debug_struct("Loading").field("title", title).finish(),
+            Self::ReadyBitmap { title, .. } => f
+                .debug_struct("ReadyBitmap")
+                .field("title", title)
+                .finish_non_exhaustive(),
+            Self::ReadyAnimatedGif {
+                title,
+                frames,
+                frame_idx,
+                ..
+            } => f
+                .debug_struct("ReadyAnimatedGif")
+                .field("title", title)
+                .field("frames", &frames.len())
+                .field("frame_idx", frame_idx)
+                .finish_non_exhaustive(),
+            Self::ReadyChafa {
+                title,
+                lines,
+                scroll,
+            } => f
+                .debug_struct("ReadyChafa")
+                .field("title", title)
+                .field("lines_len", &lines.len())
+                .field("scroll", scroll)
+                .finish(),
+            Self::Failed { message } => f.debug_struct("Failed").field("message", message).finish(),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct App {
     pub discovery: WellKnownFluxerResponse,
     pub me: UserPrivateResponse,
@@ -147,6 +239,7 @@ pub struct App {
     pub guild_roles: HashMap<Snowflake, Vec<crate::api::types::GuildRoleResponse>>,
     pub emoji_autocomplete: Option<EmojiAutocomplete>,
     pub mention_autocomplete: Option<MentionAutocomplete>,
+    pub command_autocomplete: Option<CommandAutocomplete>,
     pub selected_server: ServerSelection,
     pub selected_channel_id: Option<String>,
     pub focus: Focus,
@@ -156,6 +249,7 @@ pub struct App {
     pub reply_to: Option<ReplyState>,
     pub forward_mode: bool,
     pub read_states: HashMap<Snowflake, ReadState>,
+    pub typing_users: HashMap<Snowflake, HashMap<Snowflake, Instant>>,
     pub gateway_status: GatewayStatus,
     pub gateway_lazy_guild_id: Option<String>,
     pub status_message: String,
@@ -168,6 +262,23 @@ pub struct App {
     pub loading_messages: HashSet<String>,
     pub loading_emojis: HashSet<String>,
     pub loading_roles: HashSet<String>,
+    pub guild_roles_forbidden: HashSet<String>,
+    pub messages_older_exhausted: HashSet<String>,
+    pub loading_older_messages: HashSet<String>,
+    pub show_help: bool,
+    pub help_scroll: u16,
+    pub channel_picker: Option<ChannelPicker>,
+    pub reaction_target: Option<(String, String)>,
+    pub edit_target: Option<EditState>,
+    pub input_bar_anim_phase: u8,
+    pub input_bar_anim_slow: u8,
+    pub image_preview: Option<ImagePreviewState>,
+    pub chafa_viewport: (u16, u16),
+    pub chafa_preview_cells: (u16, u16),
+    pub image_picker: Option<Picker>,
+    pub show_settings: bool,
+    pub settings_cursor: usize,
+    pub ui_settings: UiSettings,
 }
 
 impl App {
@@ -179,6 +290,7 @@ impl App {
         private_channels: Vec<ChannelResponse>,
         selected_server: ServerSelection,
         selected_channel_id: Option<String>,
+        ui_settings: UiSettings,
     ) -> Self {
         let mut user_cache = HashMap::new();
         merge_user_cache(
@@ -203,6 +315,7 @@ impl App {
             guild_roles: HashMap::new(),
             emoji_autocomplete: None,
             mention_autocomplete: None,
+            command_autocomplete: None,
             selected_server,
             selected_channel_id,
             focus: Focus::Channels,
@@ -212,6 +325,7 @@ impl App {
             reply_to: None,
             forward_mode: false,
             read_states: HashMap::new(),
+            typing_users: HashMap::new(),
             gateway_status: GatewayStatus::Disconnected,
             gateway_lazy_guild_id: None,
             status_message: String::new(),
@@ -224,17 +338,42 @@ impl App {
             loading_messages: HashSet::new(),
             loading_emojis: HashSet::new(),
             loading_roles: HashSet::new(),
+            guild_roles_forbidden: HashSet::new(),
+            messages_older_exhausted: HashSet::new(),
+            loading_older_messages: HashSet::new(),
+            show_help: false,
+            help_scroll: 0,
+            channel_picker: None,
+            reaction_target: None,
+            edit_target: None,
+            input_bar_anim_phase: 0,
+            input_bar_anim_slow: 0,
+            image_preview: None,
+            chafa_viewport: (80, 22),
+            chafa_preview_cells: (100, 40),
+            image_picker: None,
+            show_settings: false,
+            settings_cursor: 0,
+            ui_settings,
         };
         app.normalize_selection();
         app
     }
 
+    pub const UI_SETTINGS_LAST_ROW: usize = 0;
+
+    pub fn toggle_settings_selection(&mut self) {
+        if self.settings_cursor == 0 {
+            self.ui_settings.clock_12h = !self.ui_settings.clock_12h;
+        }
+    }
+
     pub const API_FAILURE_BACKOFF_SECS: u64 = 180;
 
     pub fn api_backoff_can_try(&self, key: &str) -> bool {
-        self
-            .api_backoff_until
-            .get(key).is_none_or(|until| Instant::now() >= *until)
+        self.api_backoff_until
+            .get(key)
+            .is_none_or(|until| Instant::now() >= *until)
     }
 
     pub fn api_backoff_after_failure(&mut self, key: impl Into<String>) {
@@ -280,6 +419,36 @@ impl App {
         self.api_backoff_clear(&format!("roles:{guild_id}"));
     }
 
+    pub fn merge_guild_roles_from_gateway(
+        &mut self,
+        guild_id: &str,
+        incoming: Vec<crate::api::types::GuildRoleResponse>,
+    ) {
+        if incoming.is_empty() {
+            return;
+        }
+        let entry = self.guild_roles.entry(guild_id.to_string()).or_default();
+        for r in incoming {
+            if r.id.is_empty() {
+                continue;
+            }
+            let id_trim = r.id.trim().to_string();
+            if let Some(existing) = entry.iter_mut().find(|e| e.id.trim() == id_trim.as_str()) {
+                *existing = r;
+            } else {
+                entry.push(r);
+            }
+        }
+    }
+
+    pub fn remove_guild_role(&mut self, guild_id: &str, role_id: &str) {
+        let Some(roles) = self.guild_roles.get_mut(guild_id) else {
+            return;
+        };
+        let rid = role_id.trim();
+        roles.retain(|r| r.id.trim() != rid);
+    }
+
     pub fn server_entries(&self) -> Vec<ServerSelection> {
         let mut entries = vec![ServerSelection::DirectMessages];
         entries.extend(
@@ -314,8 +483,8 @@ impl App {
         true
     }
 
-    pub fn channel_entries(&self) -> Vec<ChannelResponse> {
-        match &self.selected_server {
+    pub fn channels_for_server(&self, server: &ServerSelection) -> Vec<ChannelResponse> {
+        match server {
             ServerSelection::DirectMessages => {
                 let mut dms = self.private_channels.clone();
                 dms.sort_by(|a, b| {
@@ -354,7 +523,6 @@ impl App {
 
                 let mut result: Vec<ChannelResponse> = Vec::new();
 
-                // channels with no parent (uncategorized) come first
                 let uncategorized: Vec<&ChannelResponse> = non_cat
                     .iter()
                     .filter(|c| c.parent_id.is_none())
@@ -379,6 +547,10 @@ impl App {
                 result
             }
         }
+    }
+
+    pub fn channel_entries(&self) -> Vec<ChannelResponse> {
+        self.channels_for_server(&self.selected_server)
     }
 
     pub fn channel_selected_index(&self) -> usize {
@@ -422,6 +594,105 @@ impl App {
         true
     }
 
+    pub fn move_channel_wrapping(&mut self, delta: i32) -> bool {
+        let channels: Vec<ChannelResponse> = self
+            .channel_entries()
+            .into_iter()
+            .filter(|c| c.channel_type() != CHANNEL_GUILD_CATEGORY)
+            .collect();
+        if channels.is_empty() {
+            return false;
+        }
+        let current = self
+            .selected_channel_id
+            .as_deref()
+            .and_then(|sid| channels.iter().position(|c| c.id == sid));
+        let idx = match current {
+            Some(i) => (i as i32 + delta).rem_euclid(channels.len() as i32) as usize,
+            None => 0,
+        };
+        let next_id = channels[idx].id.clone();
+        if self.selected_channel_id.as_deref() == Some(next_id.as_str()) {
+            return false;
+        }
+        self.selected_channel_id = Some(next_id);
+        self.message_scroll_from_bottom = 0;
+        self.selected_message_index = None;
+        true
+    }
+
+    pub fn navigable_channel_pairs(&self) -> Vec<(ServerSelection, String)> {
+        let mut out = Vec::new();
+        for server in self.server_entries() {
+            for ch in self.channels_for_server(&server) {
+                if ch.channel_type() == CHANNEL_GUILD_CATEGORY {
+                    continue;
+                }
+                if matches!(
+                    ch.channel_type(),
+                    CHANNEL_GUILD_TEXT
+                        | CHANNEL_DM
+                        | CHANNEL_GROUP_DM
+                        | CHANNEL_DM_PERSONAL_NOTES
+                        | CHANNEL_GUILD_LINK
+                ) {
+                    out.push((server.clone(), ch.id.clone()));
+                }
+            }
+        }
+        out
+    }
+
+    pub fn next_channel_with_activity(&self) -> Option<(ServerSelection, String)> {
+        let flat = self.navigable_channel_pairs();
+        if flat.len() < 2 {
+            return None;
+        }
+        let pos = flat
+            .iter()
+            .position(|(s, id)| {
+                s == &self.selected_server
+                    && Some(id.as_str()) == self.selected_channel_id.as_deref()
+            })
+            .unwrap_or(0);
+        for step in 1..flat.len() {
+            let i = (pos + step) % flat.len();
+            let (srv, cid) = &flat[i];
+            if self.channel_is_unread(cid) || self.channel_mention_count(cid) > 0 {
+                return Some((srv.clone(), cid.clone()));
+            }
+        }
+        None
+    }
+
+    pub fn can_edit_message(&self, msg: &MessageResponse) -> bool {
+        if !self.active_channel_is_text() || !self.can_send_in_active_channel() {
+            return false;
+        }
+        msg.author.id == self.me.id
+    }
+
+    pub fn can_delete_message(&self, msg: &MessageResponse) -> bool {
+        if !self.active_channel_is_text() {
+            return false;
+        }
+        let p = self.active_channel_permissions();
+        if msg.author.id == self.me.id {
+            return p & crate::permissions::VIEW_CHANNEL != 0;
+        }
+        p & crate::permissions::MANAGE_MESSAGES != 0
+    }
+
+    pub fn start_edit_message(&mut self, msg: MessageResponse) {
+        self.reply_to = None;
+        self.forward_mode = false;
+        self.edit_target = Some(EditState {
+            channel_id: msg.channel_id.clone(),
+            message_id: msg.id.clone(),
+        });
+        self.input = msg.content.clone();
+    }
+
     pub fn active_channel(&self) -> Option<ChannelResponse> {
         let active_id = self.selected_channel_id.as_deref()?;
         self.channel_entries()
@@ -431,6 +702,20 @@ impl App {
 
     pub fn active_channel_id(&self) -> Option<String> {
         self.selected_channel_id.clone()
+    }
+
+    pub fn guild_id_for_channel(&self, channel_id: &str) -> Option<String> {
+        for (guild_id, channels) in &self.guild_channels {
+            if channels.iter().any(|c| c.id == channel_id) {
+                return Some(guild_id.clone());
+            }
+        }
+        None
+    }
+
+    pub fn guild_id_for_active_channel(&self) -> Option<String> {
+        let cid = self.selected_channel_id.as_deref()?;
+        self.guild_id_for_channel(cid)
     }
 
     pub fn active_guild_id(&self) -> Option<String> {
@@ -468,11 +753,14 @@ impl App {
     }
 
     pub fn active_channel_permissions(&self) -> u64 {
-        let Some(channel) = self.active_channel() else {
-            return u64::MAX; // DMs default to full
-        };
+        self.active_channel()
+            .map(|ch| self.channel_permissions(&ch))
+            .unwrap_or(u64::MAX)
+    }
+
+    pub fn channel_permissions(&self, channel: &ChannelResponse) -> u64 {
         let Some(guild_id) = channel.guild_id.as_deref() else {
-            return u64::MAX; // DMs/group DMs
+            return u64::MAX;
         };
 
         let guild = self.guilds.iter().find(|g| g.id == guild_id);
@@ -499,6 +787,119 @@ impl App {
         )
     }
 
+    fn channel_by_id(&self, channel_id: &str) -> Option<&ChannelResponse> {
+        self.private_channels
+            .iter()
+            .find(|c| c.id == channel_id)
+            .or_else(|| {
+                self.guild_channels
+                    .values()
+                    .flat_map(|v| v.iter())
+                    .find(|c| c.id == channel_id)
+            })
+    }
+
+    pub fn patch_channel_last_message_id(&mut self, channel_id: &str, message_id: &str) {
+        let bump = |last: &Option<String>| match last {
+            None => true,
+            Some(prev) => snowflake_sort_key(message_id) > snowflake_sort_key(prev),
+        };
+        for c in &mut self.private_channels {
+            if c.id == channel_id && bump(&c.last_message_id) {
+                c.last_message_id = Some(message_id.to_string());
+                return;
+            }
+        }
+        for channels in self.guild_channels.values_mut() {
+            if let Some(c) = channels.iter_mut().find(|c| c.id == channel_id) {
+                if bump(&c.last_message_id) {
+                    c.last_message_id = Some(message_id.to_string());
+                }
+                return;
+            }
+        }
+    }
+
+    fn message_notifies_me(&self, message: &MessageResponse) -> bool {
+        if message.mentions.iter().any(|u| u.id == self.me.id) {
+            return true;
+        }
+        if !message.mention_roles.is_empty() {
+            if let Some(ch) = self.channel_by_id(&message.channel_id) {
+                if let Some(gid) = ch.guild_id.as_deref() {
+                    if let Some(roles) = self
+                        .guild_members
+                        .get(gid)
+                        .and_then(|mems| mems.iter().find(|m| m.user.id == self.me.id))
+                        .map(|m| m.roles.as_slice())
+                        && message.mention_roles.iter().any(|rid| roles.contains(rid))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        if message.mention_everyone {
+            match self.channel_by_id(&message.channel_id) {
+                None => return true,
+                Some(ch) if ch.guild_id.is_none() => return true,
+                Some(ch) => {
+                    let perms = self.channel_permissions(ch);
+                    return perms & crate::permissions::MENTION_EVERYONE != 0;
+                }
+            }
+        }
+        false
+    }
+
+    pub fn on_gateway_message_create(&mut self, message: &MessageResponse) {
+        self.patch_channel_last_message_id(&message.channel_id, &message.id);
+
+        let channel_id = message.channel_id.as_str();
+        let viewing_here = self.active_channel_id().as_deref() == Some(channel_id);
+        let from_self = message.author.id == self.me.id;
+
+        if viewing_here {
+            self.read_states.insert(
+                message.channel_id.clone(),
+                ReadState {
+                    last_message_id: Some(message.id.clone()),
+                    mention_count: 0,
+                },
+            );
+            return;
+        }
+
+        if from_self {
+            let mc = self
+                .read_states
+                .get(channel_id)
+                .map(|r| r.mention_count)
+                .unwrap_or(0);
+            self.read_states.insert(
+                message.channel_id.clone(),
+                ReadState {
+                    last_message_id: Some(message.id.clone()),
+                    mention_count: mc,
+                },
+            );
+            return;
+        }
+
+        self.read_states
+            .entry(message.channel_id.clone())
+            .or_insert(ReadState {
+                last_message_id: None,
+                mention_count: 0,
+            });
+
+        if self.message_notifies_me(message) {
+            if let Some(rs) = self.read_states.get_mut(channel_id) {
+                rs.mention_count = rs.mention_count.saturating_add(1);
+            }
+        }
+    }
+
     pub fn can_send_in_active_channel(&self) -> bool {
         let p = self.active_channel_permissions();
         p & crate::permissions::VIEW_CHANNEL != 0 && p & crate::permissions::SEND_MESSAGES != 0
@@ -523,6 +924,138 @@ impl App {
 
     pub fn set_status(&mut self, message: impl Into<String>) {
         self.status_message = message.into();
+    }
+
+    pub fn open_help(&mut self) {
+        self.help_scroll = 0;
+        self.show_help = true;
+    }
+
+    pub fn dismiss_image_preview(&mut self) {
+        self.image_preview = None;
+    }
+
+    pub fn image_preview_scroll(&mut self, delta: i32) {
+        let Some(ref mut prev) = self.image_preview else {
+            return;
+        };
+        if let ImagePreviewState::ReadyChafa { scroll, lines, .. } = prev {
+            let max = lines.len().saturating_sub(1);
+            let ns = (*scroll as i32 + delta).clamp(0, max as i32) as usize;
+            *scroll = ns;
+        }
+    }
+
+    pub fn advance_image_preview_animation(&mut self, dt: Duration) {
+        let Some(ref mut prev) = self.image_preview else {
+            return;
+        };
+        let ImagePreviewState::ReadyAnimatedGif {
+            frames,
+            delays,
+            frame_idx,
+            elapsed,
+            current_protocol,
+            ..
+        } = prev
+        else {
+            return;
+        };
+        if frames.is_empty() {
+            return;
+        }
+        *elapsed += dt;
+        let old_idx = *frame_idx;
+        loop {
+            let lim = delays
+                .get(*frame_idx)
+                .copied()
+                .unwrap_or(Duration::from_millis(100));
+            if *elapsed < lim {
+                break;
+            }
+            *elapsed -= lim;
+            *frame_idx = (*frame_idx + 1) % frames.len();
+        }
+        if *frame_idx != old_idx {
+            if let Some(ref picker) = self.image_picker {
+                *current_protocol = picker.new_resize_protocol(frames[*frame_idx].clone());
+            }
+        }
+    }
+
+    pub fn start_image_preview_loading(&mut self, title: String) {
+        self.image_preview = Some(ImagePreviewState::Loading { title });
+    }
+
+    pub const TYPING_TTL: Duration = Duration::from_secs(10);
+
+    pub fn record_typing(&mut self, channel_id: &str, user_id: &str) {
+        if channel_id.is_empty() || user_id.is_empty() || user_id == self.me.id {
+            return;
+        }
+        let exp = Instant::now() + Self::TYPING_TTL;
+        self.typing_users
+            .entry(channel_id.to_string())
+            .or_default()
+            .insert(user_id.to_string(), exp);
+    }
+
+    pub fn clear_typing_for_message(&mut self, channel_id: &str, user_id: &str) {
+        if let Some(map) = self.typing_users.get_mut(channel_id) {
+            map.remove(user_id);
+            if map.is_empty() {
+                self.typing_users.remove(channel_id);
+            }
+        }
+    }
+
+    pub fn prune_stale_typing(&mut self) {
+        let now = Instant::now();
+        self.typing_users.retain(|_, users| {
+            users.retain(|_, exp| *exp > now);
+            !users.is_empty()
+        });
+    }
+
+    pub fn clear_all_typing(&mut self) {
+        self.typing_users.clear();
+    }
+
+    pub fn typing_peer_names(&self, channel_id: &str) -> Vec<String> {
+        let now = Instant::now();
+        let Some(users) = self.typing_users.get(channel_id) else {
+            return Vec::new();
+        };
+        let mut ids: Vec<&String> = users
+            .iter()
+            .filter(|(_, exp)| **exp > now)
+            .map(|(id, _)| id)
+            .collect();
+        ids.sort();
+        let guild = self.guild_id_for_channel(channel_id);
+        ids.into_iter()
+            .map(|id| {
+                self.user_cache
+                    .get(id.as_str())
+                    .map(|u| self.shown_name_for_user(guild.as_deref(), u))
+                    .unwrap_or_else(|| id.clone())
+            })
+            .collect()
+    }
+
+    pub fn others_typing_phrase(&self) -> Option<String> {
+        let ch = self.active_channel_id()?;
+        let names = self.typing_peer_names(&ch);
+        if names.is_empty() {
+            return None;
+        }
+        Some(fluxer_typing_phrase(&names))
+    }
+
+    pub fn others_typing_anim_active(&self) -> bool {
+        self.active_channel_id()
+            .is_some_and(|c| !self.typing_peer_names(&c).is_empty())
     }
 
     pub fn normalize_selection(&mut self) {
@@ -591,6 +1124,7 @@ impl App {
         self.api_backoff_clear_guild(guild_id);
         self.guild_emojis.remove(guild_id);
         self.guild_roles.remove(guild_id);
+        self.guild_roles_forbidden.remove(guild_id);
         self.voice_states.remove(guild_id);
         self.normalize_selection();
     }
@@ -678,34 +1212,77 @@ impl App {
         self.api_backoff_clear(&format!("members:{guild_id}"));
     }
 
-    pub fn upsert_message(&mut self, message: MessageResponse) {
-        if message.channel_id.is_empty() {
+    pub fn ingest_gateway_guild_members(
+        &mut self,
+        guild_id: &str,
+        members: Vec<GuildMemberResponse>,
+    ) {
+        if members.is_empty() {
             return;
         }
+        if self.guild_members_synced.contains(guild_id) {
+            for m in members {
+                self.merge_guild_member(guild_id, m);
+            }
+        } else {
+            self.set_guild_members(guild_id, members);
+        }
+    }
+
+    pub fn upsert_message(&mut self, message: MessageResponse) -> bool {
+        if message.channel_id.is_empty() {
+            return false;
+        }
+        self.merge_message_embedded_members(&message);
         merge_user_cache(&mut self.user_cache, [message.author.clone()]);
+        merge_user_cache(&mut self.user_cache, message.mentions.iter().cloned());
 
         let channel_id = message.channel_id.clone();
         let entries = self.messages.entry(channel_id).or_default();
-        if let Some(existing) = entries
+        let was_new = if let Some(existing) = entries
             .iter_mut()
             .find(|existing| existing.id == message.id)
         {
             *existing = message;
+            false
         } else {
             entries.push(message);
-        }
+            true
+        };
         entries.sort_by_key(|entry| snowflake_sort_key(&entry.id));
+        was_new
     }
 
     pub fn set_channel_messages(&mut self, channel_id: &str, mut messages: Vec<MessageResponse>) {
         for message in &messages {
+            self.merge_message_embedded_members(message);
             merge_user_cache(&mut self.user_cache, [message.author.clone()]);
         }
         messages.sort_by_key(|message| snowflake_sort_key(&message.id));
+        if messages.len() < 50 {
+            self.messages_older_exhausted.insert(channel_id.to_string());
+        } else {
+            self.messages_older_exhausted.remove(channel_id);
+        }
         self.messages.insert(channel_id.to_string(), messages);
         self.loading_messages.remove(channel_id);
         self.api_backoff_clear(&format!("messages:{channel_id}"));
         self.message_scroll_from_bottom = 0;
+    }
+
+    pub fn prepend_channel_messages(&mut self, channel_id: &str, older: Vec<MessageResponse>) {
+        for message in &older {
+            self.merge_message_embedded_members(message);
+            merge_user_cache(&mut self.user_cache, [message.author.clone()]);
+        }
+        let entry = self.messages.entry(channel_id.to_string()).or_default();
+        for m in older {
+            if !entry.iter().any(|e| e.id == m.id) {
+                entry.push(m);
+            }
+        }
+        entry.sort_by_key(|m| snowflake_sort_key(&m.id));
+        self.loading_older_messages.remove(channel_id);
     }
 
     pub fn remove_message(&mut self, channel_id: &str, message_id: &str) {
@@ -720,16 +1297,7 @@ impl App {
         };
 
         if let Some(member) = state.member.clone() {
-            let members = self.guild_members.entry(guild_id.clone()).or_default();
-            if let Some(existing) = members
-                .iter_mut()
-                .find(|existing| existing.user.id == member.user.id)
-            {
-                *existing = member.clone();
-            } else {
-                members.push(member.clone());
-            }
-            merge_user_cache(&mut self.user_cache, [member.user]);
+            self.merge_guild_member(guild_id.as_str(), member);
         }
 
         let guild_states = self.voice_states.entry(guild_id).or_default();
@@ -755,12 +1323,18 @@ impl App {
             .values()
             .filter(|state| state.channel_id.as_deref() == Some(channel.id.as_str()))
             .map(|state| {
-                let name = state
-                    .member
-                    .as_ref()
-                    .and_then(|member| member.nick.clone())
-                    .or_else(|| self.user_cache.get(&state.user_id).map(display_name))
-                    .unwrap_or_else(|| state.user_id.clone());
+                let name = if let Some(m) = state.member.as_ref() {
+                    let u = self.user_cache.get(&m.user.id).unwrap_or(&m.user);
+                    m.nick
+                        .as_ref()
+                        .filter(|n| !n.trim().is_empty())
+                        .cloned()
+                        .unwrap_or_else(|| account_display_name(u))
+                } else if let Some(u) = self.user_cache.get(&state.user_id) {
+                    self.shown_name_for_user(Some(guild_id.as_str()), u)
+                } else {
+                    state.user_id.clone()
+                };
 
                 let mut badges = Vec::new();
                 if state.self_mute {
@@ -804,7 +1378,7 @@ impl App {
 
         // guild custom emojis first
         let guild_emojis: Vec<crate::api::types::GuildEmojiResponse> = self
-            .active_guild_id()
+            .guild_id_for_active_channel()
             .and_then(|gid| self.guild_emojis.get(&gid))
             .cloned()
             .unwrap_or_default();
@@ -884,13 +1458,14 @@ impl App {
     pub fn insert_selected_emoji(&mut self) -> bool {
         if let Some(auto) = &self.emoji_autocomplete
             && let Some(emoji) = auto.matches.get(auto.selected_index)
-            && let Some(colon_pos) = self.input.rfind(':') {
-                self.input.truncate(colon_pos);
-                self.input.push_str(&emoji.insert);
-                self.input.push(' ');
-                self.emoji_autocomplete = None;
-                return true;
-            }
+            && let Some(colon_pos) = self.input.rfind(':')
+        {
+            self.input.truncate(colon_pos);
+            self.input.push_str(&emoji.insert);
+            self.input.push(' ');
+            self.emoji_autocomplete = None;
+            return true;
+        }
         false
     }
 
@@ -949,9 +1524,10 @@ impl App {
     fn channel_last_message_id(&self, channel_id: &str) -> Option<String> {
         // check from cached messages first -> try from channel metadata
         if let Some(msgs) = self.messages.get(channel_id)
-            && let Some(last) = msgs.last() {
-                return Some(last.id.clone());
-            }
+            && let Some(last) = msgs.last()
+        {
+            return Some(last.id.clone());
+        }
         // falls back (ah myback!)
         let all_channels: Vec<&ChannelResponse> = self
             .private_channels
@@ -977,6 +1553,22 @@ impl App {
             .unwrap_or(count.saturating_sub(1));
         let next = (current as i32 + delta).clamp(0, count as i32 - 1) as usize;
         self.selected_message_index = Some(next);
+        self.clamp_scroll_to_selected_message();
+    }
+
+    pub fn clamp_scroll_to_selected_message(&mut self) {
+        let (w, h) = self.chafa_viewport;
+        if w == 0 || h == 0 {
+            return;
+        }
+        if let Some(s) = crate::ui::message_pane::scroll_for_selected_message(
+            self,
+            w.max(1),
+            h.max(1),
+            self.message_scroll_from_bottom,
+        ) {
+            self.message_scroll_from_bottom = s;
+        }
     }
 
     pub fn selected_message(&self) -> Option<MessageResponse> {
@@ -989,17 +1581,144 @@ impl App {
 
     pub fn start_reply(&mut self) {
         if let Some(msg) = self.selected_message() {
+            self.edit_target = None;
+            let src_guild = self.guild_id_for_channel(&msg.channel_id);
             self.reply_to = Some(ReplyState {
                 channel_id: msg.channel_id.clone(),
                 message_id: msg.id.clone(),
-                author_name: display_name(&msg.author),
+                author_name: self.shown_name_for_user(src_guild.as_deref(), &msg.author),
+                source_guild_id: src_guild,
             });
+            self.forward_mode = false;
             self.focus = Focus::Input;
         }
     }
 
     pub fn cancel_reply(&mut self) {
         self.reply_to = None;
+        self.forward_mode = false;
+        self.edit_target = None;
+    }
+
+    pub fn open_channel_picker(&mut self) {
+        let mut entries = Vec::new();
+        for server in self.server_entries() {
+            let server_name = match &server {
+                ServerSelection::DirectMessages => "Direct messages".to_string(),
+                ServerSelection::Guild(gid) => self
+                    .guilds
+                    .iter()
+                    .find(|g| g.id == *gid)
+                    .map(|g| g.name.clone())
+                    .filter(|n| !n.trim().is_empty())
+                    .unwrap_or_else(|| {
+                        let short: String = gid.chars().take(8).collect();
+                        format!("guild {short}")
+                    }),
+            };
+            for ch in self.channels_for_server(&server) {
+                if ch.channel_type() == CHANNEL_GUILD_CATEGORY {
+                    continue;
+                }
+                if !matches!(
+                    ch.channel_type(),
+                    CHANNEL_GUILD_TEXT
+                        | CHANNEL_DM
+                        | CHANNEL_GROUP_DM
+                        | CHANNEL_DM_PERSONAL_NOTES
+                        | CHANNEL_GUILD_LINK
+                ) {
+                    continue;
+                }
+                let ch_label = picker_channel_line(&ch);
+                let label = format!("{ch_label} · {server_name}");
+                entries.push(PickerEntry {
+                    server: server.clone(),
+                    channel_id: ch.id.clone(),
+                    label,
+                });
+            }
+        }
+        let n = entries.len();
+        self.channel_picker = Some(ChannelPicker {
+            query: String::new(),
+            entries,
+            filtered: (0..n).collect(),
+            selected: 0,
+        });
+    }
+
+    pub fn filter_channel_picker(&mut self) {
+        let Some(p) = self.channel_picker.as_mut() else {
+            return;
+        };
+        let q = p.query.to_lowercase();
+        p.filtered = p
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| q.is_empty() || e.label.to_lowercase().contains(&q))
+            .map(|(i, _)| i)
+            .collect();
+        if p.filtered.is_empty() {
+            p.selected = 0;
+        } else {
+            p.selected = p.selected.min(p.filtered.len() - 1);
+        }
+    }
+
+    pub fn channel_picker_prev(&mut self) {
+        let Some(p) = self.channel_picker.as_mut() else {
+            return;
+        };
+        if p.filtered.is_empty() {
+            return;
+        }
+        p.selected = (p.selected + p.filtered.len() - 1) % p.filtered.len();
+    }
+
+    pub fn channel_picker_next(&mut self) {
+        let Some(p) = self.channel_picker.as_mut() else {
+            return;
+        };
+        if p.filtered.is_empty() {
+            return;
+        }
+        p.selected = (p.selected + 1) % p.filtered.len();
+    }
+
+    pub fn channel_picker_confirm(&mut self) -> bool {
+        let Some(p) = &self.channel_picker else {
+            return false;
+        };
+        let Some(&ei) = p.filtered.get(p.selected) else {
+            return false;
+        };
+        let Some(entry) = p.entries.get(ei) else {
+            return false;
+        };
+        self.selected_server = entry.server.clone();
+        self.selected_channel_id = Some(entry.channel_id.clone());
+        self.channel_picker = None;
+        self.message_scroll_from_bottom = 0;
+        self.selected_message_index = None;
+        self.normalize_selection();
+        true
+    }
+
+    pub fn dismiss_channel_picker(&mut self) {
+        self.channel_picker = None;
+    }
+
+    pub fn confirm_reaction_emoji(&mut self) -> Option<(String, String, String)> {
+        let (ch_id, msg_id) = self.reaction_target.clone()?;
+        let auto = self.emoji_autocomplete.as_ref()?;
+        let emoji = auto.matches.get(auto.selected_index)?;
+        let api = encode_reaction_for_api(&emoji.insert);
+        self.reaction_target = None;
+        self.emoji_autocomplete = None;
+        self.input.clear();
+        Some((ch_id, msg_id, api))
     }
 
     // ma
@@ -1062,9 +1781,9 @@ impl App {
                             cached_user.map(|u| u.username.clone()).unwrap_or_default()
                         };
                         let base_display = if !m.user.username.is_empty() {
-                            display_name(&m.user)
+                            account_display_name(cached_user.unwrap_or(&m.user))
                         } else {
-                            cached_user.map(display_name).unwrap_or_default()
+                            cached_user.map(account_display_name).unwrap_or_default()
                         };
                         let nick_display = m
                             .nick
@@ -1123,7 +1842,7 @@ impl App {
         }
 
         if let Some(channel_id) = self.selected_channel_id.as_deref() {
-            let guild_id = self.active_guild_id();
+            let guild_id = self.guild_id_for_channel(channel_id);
             if let Some(msgs) = self.messages.get(channel_id) {
                 for msg in msgs {
                     if msg.author.id.is_empty() || !seen_users.insert(msg.author.id.clone()) {
@@ -1136,7 +1855,8 @@ impl App {
                                 .and_then(|m| m.nick.clone())
                         })
                     });
-                    let base_display = display_name(&msg.author);
+                    let u = self.user_cache.get(&msg.author.id).unwrap_or(&msg.author);
+                    let base_display = account_display_name(u);
                     let display = nick
                         .filter(|n| !n.trim().is_empty())
                         .unwrap_or(base_display.clone());
@@ -1242,11 +1962,280 @@ impl App {
         false
     }
 
+    pub fn self_nick_or_username_in_guild(&self, guild_id: &str) -> String {
+        self.shown_name_for_user(Some(guild_id), &me_as_partial(&self.me))
+    }
+
+    pub fn shown_name_for_user(
+        &self,
+        guild_id: Option<&str>,
+        user: &UserPartialResponse,
+    ) -> String {
+        let u = self.user_cache.get(&user.id).unwrap_or(user);
+        if let Some(gid) = guild_id {
+            if let Some(members) = self.guild_members.get(gid) {
+                if let Some(m) = members.iter().find(|m| m.user.id == user.id) {
+                    let base = self.user_cache.get(&m.user.id).unwrap_or(&m.user);
+                    return m
+                        .nick
+                        .as_ref()
+                        .filter(|n| !n.trim().is_empty())
+                        .cloned()
+                        .unwrap_or_else(|| account_display_name(base));
+                }
+            }
+        }
+        account_display_name(u)
+    }
+
+    pub fn member_name_color(&self, guild_id: Option<&str>, user_id: &str, is_self: bool) -> Color {
+        use crate::api::types::snowflake_sort_key;
+
+        let guild_default = || crate::ui::theme::TEXT;
+
+        if let Some(gid) = guild_id {
+            if let Some(members) = self.guild_members.get(gid) {
+                if let Some(member) = members.iter().find(|m| m.user.id == user_id) {
+                    if let Some(roles) = self.guild_roles.get(gid) {
+                        let role_pos = |rid: &str| {
+                            let rid = rid.trim();
+                            roles
+                                .iter()
+                                .find(|r| r.id.trim() == rid)
+                                .map(|r| r.position)
+                                .unwrap_or(i32::MIN)
+                        };
+                        let mut role_ids: Vec<&str> =
+                            member.roles.iter().map(|s| s.as_str()).collect();
+                        role_ids.sort_by(|a, b| {
+                            role_pos(b).cmp(&role_pos(a)).then_with(|| {
+                                snowflake_sort_key(a.trim()).cmp(&snowflake_sort_key(b.trim()))
+                            })
+                        });
+                        for rid in role_ids {
+                            let rid = rid.trim();
+                            if let Some(r) = roles.iter().find(|rr| rr.id.trim() == rid) {
+                                if r.color != 0 {
+                                    return crate::ui::theme::rgb_pack_to_color(r.color);
+                                }
+                            }
+                        }
+                        let gid_trim = gid.trim();
+                        if let Some(everyone) = roles.iter().find(|r| r.id.trim() == gid_trim) {
+                            if everyone.color != 0 {
+                                return crate::ui::theme::rgb_pack_to_color(everyone.color);
+                            }
+                        }
+                    }
+                    return guild_default();
+                }
+            }
+            return guild_default();
+        }
+
+        if is_self {
+            crate::ui::theme::self_username_color()
+        } else {
+            crate::ui::theme::username_color(user_id)
+        }
+    }
+
+    pub fn sync_command_autocomplete(&mut self) {
+        if self.focus != Focus::Input || !self.can_send_in_active_channel() {
+            self.command_autocomplete = None;
+            return;
+        }
+        let Some(q) = crate::slash_commands::command_name_query(&self.input) else {
+            self.command_autocomplete = None;
+            return;
+        };
+        let guild_ch = self
+            .active_channel()
+            .and_then(|c| c.guild_id.clone())
+            .is_some();
+        let ch_perms = self.active_channel_permissions();
+        let matches = crate::slash_commands::filter_command_indices(q, guild_ch, ch_perms);
+        if matches.is_empty() {
+            self.command_autocomplete = None;
+            return;
+        }
+        let selected_index = self
+            .command_autocomplete
+            .as_ref()
+            .map(|a| a.selected_index.min(matches.len().saturating_sub(1)))
+            .unwrap_or(0);
+        self.command_autocomplete = Some(CommandAutocomplete {
+            matches,
+            selected_index,
+        });
+    }
+
+    pub fn dismiss_command_autocomplete(&mut self) {
+        self.command_autocomplete = None;
+    }
+
+    pub fn autocomplete_command_next(&mut self) {
+        if let Some(auto) = &mut self.command_autocomplete
+            && !auto.matches.is_empty()
+        {
+            auto.selected_index = (auto.selected_index + 1) % auto.matches.len();
+        }
+    }
+
+    pub fn autocomplete_command_prev(&mut self) {
+        if let Some(auto) = &mut self.command_autocomplete
+            && !auto.matches.is_empty()
+        {
+            auto.selected_index =
+                auto.selected_index.saturating_add(auto.matches.len() - 1) % auto.matches.len();
+        }
+    }
+
+    pub fn insert_selected_slash_command(&mut self) -> bool {
+        let Some(auto) = &self.command_autocomplete else {
+            return false;
+        };
+        let Some(&cmd_i) = auto.matches.get(auto.selected_index) else {
+            return false;
+        };
+        let cmd = &crate::slash_commands::SLASH_COMMANDS[cmd_i];
+        let Some(slash_pos) = self.input.find('/') else {
+            return false;
+        };
+        let after = &self.input[slash_pos + 1..];
+        let token_len = after
+            .find(|c: char| c.is_whitespace())
+            .unwrap_or(after.len());
+        let end = slash_pos + 1 + token_len;
+        let trailing_space = cmd.simple_append.is_none();
+        let mut new_in = String::new();
+        new_in.push_str(&self.input[..slash_pos]);
+        new_in.push_str(cmd.name);
+        if trailing_space {
+            new_in.push(' ');
+        }
+        new_in.push_str(&self.input[end..]);
+        self.input = new_in;
+        self.command_autocomplete = None;
+        self.sync_command_autocomplete();
+        true
+    }
+
+    fn merge_single_message_member(&mut self, message: &MessageResponse) {
+        let Some(mem) = message.member.as_ref() else {
+            return;
+        };
+        let Some(gid) = self.guild_id_for_channel(&message.channel_id) else {
+            return;
+        };
+        self.merge_guild_member(gid.as_str(), mem.clone());
+    }
+
+    fn merge_message_embedded_members(&mut self, message: &MessageResponse) {
+        self.merge_single_message_member(message);
+        if let Some(r) = message.referenced_message.as_deref() {
+            self.merge_message_embedded_members(r);
+        }
+    }
+
+    pub fn merge_guild_member(&mut self, guild_id: &str, mut member: GuildMemberResponse) {
+        merge_user_cache(&mut self.user_cache, [member.user.clone()]);
+        let members = self.guild_members.entry(guild_id.to_string()).or_default();
+        if let Some(existing) = members.iter().find(|m| m.user.id == member.user.id) {
+            if member.roles.is_empty() && !existing.roles.is_empty() {
+                member.roles = existing.roles.clone();
+            }
+            if member.nick.is_none() && existing.nick.is_some() {
+                member.nick = existing.nick.clone();
+            }
+        }
+        if let Some(existing) = members.iter_mut().find(|m| m.user.id == member.user.id) {
+            *existing = member;
+        } else {
+            members.push(member);
+        }
+    }
+
+    pub fn allocate_local_message_snowflake(&self, channel_id: &str) -> String {
+        let msgs = self
+            .messages
+            .get(channel_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
+        let max_k = msgs
+            .iter()
+            .map(|m| snowflake_sort_key(&m.id))
+            .max()
+            .unwrap_or(0);
+        const DISCORD_EPOCH_MS: u128 = 1420070400000;
+        let ts = chrono::Utc::now().timestamp_millis() as u128;
+        let delta = ts.saturating_sub(DISCORD_EPOCH_MS);
+        let mut candidate = delta.saturating_mul(1u128 << 22);
+        if candidate <= max_k {
+            candidate = max_k.saturating_add(1);
+        }
+        candidate.to_string()
+    }
+
     // permission(orn) helpers
 
     pub fn can_react_in_active_channel(&self) -> bool {
         self.active_channel_permissions() & crate::permissions::ADD_REACTIONS != 0
     }
+}
+
+fn picker_channel_line(ch: &ChannelResponse) -> String {
+    match ch.channel_type() {
+        CHANNEL_GUILD_TEXT | CHANNEL_GUILD_LINK => {
+            if ch.name.is_empty() {
+                ch.id.chars().take(6).collect()
+            } else {
+                format!("#{}", ch.name)
+            }
+        }
+        CHANNEL_DM_PERSONAL_NOTES => "Personal notes".to_string(),
+        CHANNEL_DM => ch
+            .recipients
+            .first()
+            .map(display_name)
+            .unwrap_or_else(|| "DM".to_string()),
+        CHANNEL_GROUP_DM => {
+            if !ch.name.trim().is_empty() {
+                ch.name.clone()
+            } else if !ch.recipients.is_empty() {
+                ch.recipients
+                    .iter()
+                    .map(display_name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            } else {
+                "Group DM".to_string()
+            }
+        }
+        _ => {
+            if ch.name.is_empty() {
+                ch.id.chars().take(6).collect()
+            } else {
+                ch.name.clone()
+            }
+        }
+    }
+}
+
+fn encode_reaction_for_api(insert: &str) -> String {
+    let t = insert.trim();
+    if t.starts_with('<') && t.ends_with('>') && t.contains(':') {
+        let inner = &t[1..t.len() - 1];
+        let parts: Vec<&str> = inner.split(':').collect();
+        if parts.len() >= 3 {
+            let id = parts[parts.len() - 1];
+            let name = parts[parts.len() - 2];
+            if !name.is_empty() && !id.is_empty() {
+                return format!("{name}:{id}");
+            }
+        }
+    }
+    t.to_string()
 }
 
 pub fn me_as_partial(me: &UserPrivateResponse) -> UserPartialResponse {
@@ -1261,15 +2250,40 @@ pub fn me_as_partial(me: &UserPrivateResponse) -> UserPartialResponse {
     }
 }
 
-pub fn display_name(user: &UserPartialResponse) -> String {
+pub fn account_display_name(user: &UserPartialResponse) -> String {
     user.global_name
         .clone()
         .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| {
-            if user.discriminator.is_empty() {
-                user.username.clone()
-            } else {
-                format!("{}#{}", user.username, user.discriminator)
-            }
-        })
+        .unwrap_or_else(|| username_handle(user))
+}
+
+fn username_handle(user: &UserPartialResponse) -> String {
+    if user.discriminator.is_empty() {
+        user.username.clone()
+    } else {
+        format!("{}#{}", user.username, user.discriminator)
+    }
+}
+
+pub fn display_name(user: &UserPartialResponse) -> String {
+    account_display_name(user)
+}
+
+fn fluxer_typing_phrase(names: &[String]) -> String {
+    const SEVERAL: &str = "Several people are typing...";
+    const HANDFUL: &str = "A handful of keyboard warriors are assembling...";
+    const SYMPHONY: &str = "A symphony of clacking keys is underway...";
+    const FIESTA: &str = "It's a full-blown typing fiesta in here";
+    const APOCALYPSE: &str = "Whoa, it's a typing apocalypse";
+
+    match names.len() {
+        1 => format!("{} is typing...", names[0]),
+        2 => format!("{} and {} are typing...", names[0], names[1]),
+        3 => format!("{}, {} and {} are typing...", names[0], names[1], names[2]),
+        4 => SEVERAL.to_string(),
+        n if (5..=9).contains(&n) => HANDFUL.to_string(),
+        n if (10..=14).contains(&n) => SYMPHONY.to_string(),
+        n if (15..=19).contains(&n) => FIESTA.to_string(),
+        _ => APOCALYPSE.to_string(),
+    }
 }

@@ -25,7 +25,7 @@ const OP_LAZY_REQUEST: u8 = 14;
 
 #[derive(Debug, Clone)]
 pub enum GatewayCommand {
-    /// User-account sessions: subscribe so MESSAGE_CREATE etc. are delivered (see fluxer session_passive).
+    /// User-account sessions: subscribe so MESSAGE_CREATE, TYPING_START, etc. are delivered (see fluxer session_passive).
     LazySubscribeGuild { guild_id: String },
     Shutdown,
 }

@@ -4,10 +4,14 @@ pub const ADMINISTRATOR: u64 = 0x8;
 pub const ADD_REACTIONS: u64 = 0x40;
 pub const VIEW_CHANNEL: u64 = 0x400;
 pub const SEND_MESSAGES: u64 = 0x800;
+pub const SEND_TTS_MESSAGES: u64 = 0x1000;
+pub const MANAGE_MESSAGES: u64 = 0x2000;
+pub const CHANGE_NICKNAME: u64 = 0x4000000;
 
 /// Kept in sync with the API
 #[allow(dead_code)]
 pub const READ_MESSAGE_HISTORY: u64 = 0x10000;
+pub const MENTION_EVERYONE: u64 = 0x20000;
 
 const OVERWRITE_ROLE: i32 = 0;
 const OVERWRITE_MEMBER: i32 = 1;

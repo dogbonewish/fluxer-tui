@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Fluxer documentation
+    url: https://docs.fluxer.app
+    about: HTTP API, gateway, and platform behaviour etc etc.
+  - name: Fluxer (upstream)
+    url: https://github.com/fluxerapp/fluxer
+    about: Server or official app issues belong there, not in this TUI repo.

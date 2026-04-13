@@ -1,0 +1,26 @@
+name: Packaging / install / CI
+description: AUR, distro packages, release binaries, or GitHub Actions.
+labels: ["packaging"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - AUR / PKGBUILD
+        - GitHub Actions (CI / release)
+        - Cargo / crates.io (if applicable)
+        - Other install path
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is the issue?
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Distro, `pacman`/`cargo` version, runner OS. Whatever will help me to reproduce.

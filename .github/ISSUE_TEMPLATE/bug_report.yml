@@ -1,0 +1,53 @@
+name: Bug report
+description: Something does not work as expected.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. If the problem is with **Fluxer itself** (API, server, web app), report it to them instead.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Short description of the bug.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps, starting from launch if relevant.
+      placeholder: |
+        1. …
+        2. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: Output of `fluxer-tui --version` or git commit hash if you built from source.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, terminal emulator, `$TERM`, Rust version if you built locally—whatever might matter.
+      placeholder: e.g. Arch Linux, kitty, xterm-256color, rustc 1.85
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Paste errors, gateway/API messages, or attach a screenshot of the TUI if it helps.
+  - type: checkboxes
+    id: instance
+    attributes:
+      label: Instance
+      options:
+        - label: I can reproduce this on fluxer.app (or I only use a self-hosted instance,say which below).

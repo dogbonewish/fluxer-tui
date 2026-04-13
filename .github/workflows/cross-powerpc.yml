@@ -1,0 +1,68 @@
+name: Cross-build PowerPC (YW Astro <3)
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "cross-powerpc/**"
+      - ".github/workflows/cross-powerpc.yml"
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "cross-powerpc/**"
+      - ".github/workflows/cross-powerpc.yml"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  TARGET: powerpc-unknown-linux-gnu
+
+jobs:
+  build-powerpc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: rust setup
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: powerpc-unknown-linux-gnu
+
+      - name: install cross
+        run: cargo install cross --locked
+
+      - name: cache cargo registry + cross docker layers
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            cross-powerpc/target/
+          key: ${{ runner.os }}-cross-ppc-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cross-ppc-
+
+      - name: cross-build powerpc-unknown-linux-gnu (release)
+        run: |
+          export CARGO_TARGET_DIR="$PWD/cross-powerpc/target"
+          cross build --release --target ${{ env.TARGET }}
+
+      - name: copy binary + verify
+        run: |
+          mkdir -p cross-powerpc/out
+          cp cross-powerpc/target/${{ env.TARGET }}/release/fluxer-tui cross-powerpc/out/fluxer-tui
+          file cross-powerpc/out/fluxer-tui
+          ls -lh cross-powerpc/out/fluxer-tui
+
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluxer-tui-powerpc-linux-gnu
+          path: cross-powerpc/out/fluxer-tui

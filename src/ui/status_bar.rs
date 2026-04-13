@@ -19,28 +19,31 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let channel = app
         .active_channel()
         .map(|c| format!("#{}", c.name))
-        .unwrap_or_default();
+        .unwrap_or_else(|| "-".to_string());
 
-    let status_msg = if app.status_message.is_empty() {
+    let status_mid = if app.status_message.is_empty() {
         String::new()
     } else {
         format!(" | {}", app.status_message)
     };
 
-    let hints = if app.focus == Focus::Messages {
-        if app.selected_message_index.is_some() {
-            " | r:reply f:fwd e:react Esc:deselect"
-        } else {
-            " | s:select i:input"
+    let hints = match app.focus {
+        Focus::Servers => {
+            " · j/k servers · Tab/h/l · l open channels"
         }
-    } else {
-        ""
-    };
-
-    let api_hint = if app.discovery.api_code_version > 0 {
-        format!(" api{}", app.discovery.api_code_version)
-    } else {
-        String::new()
+        Focus::Channels => {
+            " · j/k channels · Tab · Enter msg · i input · R refresh"
+        }
+        Focus::Messages => {
+            if app.selected_message_index.is_some() {
+                " · r reply · f forward · e react · Ctrl+E edit · Ctrl+D del · [ older · Alt+A"
+            } else {
+                " · s select · [ older · Alt+A · i input · Ctrl+H help"
+            }
+        }
+        Focus::Input => {
+            " · Ctrl+K picker · Ctrl+N/P channel · Alt+A · Ctrl+H help"
+        }
     };
 
     let paragraph = Paragraph::new(Line::from(vec![
@@ -49,9 +52,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             app.gateway_status.label(),
             crate::ui::theme::gateway_status_style(app.gateway_status),
         ),
-        Span::styled(api_hint, Style::default().fg(crate::ui::theme::TEXT_MUTED)),
         Span::styled(
-            format!("  {server} {channel}{status_msg}"),
+            format!(" | {server} | {channel}{status_mid}"),
             Style::default().fg(crate::ui::theme::TEXT_DIM),
         ),
         Span::styled(hints, Style::default().fg(crate::ui::theme::TEXT_MUTED)),

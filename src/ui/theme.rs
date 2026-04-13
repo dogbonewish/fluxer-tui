@@ -13,6 +13,8 @@ pub const TEXT_MUTED: Color = Color::Rgb(94, 103, 114);
 pub const EMOJI_UNKNOWN: Color = Color::Rgb(254, 231, 92);
 pub const LINK_COLOR: Color = Color::Rgb(0, 168, 252);
 pub const DANGER: Color = Color::Rgb(237, 66, 69);
+/// Others typing (input bar title) — not `TEXT_MUTED` so it doesn’t match the empty placeholder.
+pub const TYPING_OTHERS: Color = Color::Rgb(114, 218, 167);
 
 pub const USERNAME_COLORS: [Color; 12] = [
     Color::Rgb(235, 69, 158),
@@ -40,19 +42,21 @@ pub fn self_username_color() -> Color {
     Color::Rgb(0, 229, 255)
 }
 
-/// Style for a guild role name (Discord RGB; 0 = default accent).
+pub fn rgb_pack_to_color(packed: u32) -> Color {
+    Color::Rgb(
+        ((packed >> 16) & 0xFF) as u8,
+        ((packed >> 8) & 0xFF) as u8,
+        (packed & 0xFF) as u8,
+    )
+}
+
 pub fn role_mention_style(color: u32) -> Style {
     if color == 0 {
         Style::default()
             .fg(ACCENT)
             .add_modifier(Modifier::BOLD)
     } else {
-        let c = color as u64;
-        Style::default().fg(Color::Rgb(
-            ((c >> 16) & 0xFF) as u8,
-            ((c >> 8) & 0xFF) as u8,
-            (c & 0xFF) as u8,
-        ))
+        Style::default().fg(rgb_pack_to_color(color))
     }
 }
 
