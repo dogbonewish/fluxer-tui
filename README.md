@@ -172,6 +172,7 @@ Plain letters (without **Ctrl**) are inserted into the message, except where aut
 - **Voice** is view-only; no join/transmit/hear.
 - "Pick an emoji, Enter to react (Esc to cancel)" is stuck. Will be fixed soonTM.
 - highlighted messages for when someone replies to you
+- Proper Slowmode support instead of "Failed to send message: 400 Bad Request Slow mode rate limited."
 - Open a **feature request** issue for anything you want that is not here yet.
 
 ## License
