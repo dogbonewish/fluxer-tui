@@ -170,6 +170,8 @@ Plain letters (without **Ctrl**) are inserted into the message, except where aut
 
 - **Markdown** parser is still hand-crafted with duct-tape and incomplete.
 - **Voice** is view-only; no join/transmit/hear.
+- "Pick an emoji, Enter to react (Esc to cancel)" is stuck. Will be fixed soonTM.
+- highlighted messages for when someone replies to you
 - Open a **feature request** issue for anything you want that is not here yet.
 
 ## License
