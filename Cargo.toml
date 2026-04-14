@@ -1,6 +1,6 @@
 [package]
 name = "fluxer-tui"
-version = "0.7.2"
+version = "0.7.3"
 edition = "2024"
 description = "A TUI chat client for the Fluxer messaging platform"
 license = "MIT"
