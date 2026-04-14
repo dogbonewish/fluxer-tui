@@ -16,6 +16,12 @@ cargo build --release
 cargo run --release
 ```
 
+## Community
+   
+   > *fluxer-tui running on a vintage Apple iBook - courtesy of @astromahdi#2602*
+   
+   ![fluxer-tui on iBook](assets/IMG_7484.jpeg)
+
 ## First-time login
 
 If you have no valid saved token then you can easily login via the browser. The TUI will automatically:
