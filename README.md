@@ -179,6 +179,8 @@ Plain letters (without **Ctrl**) are inserted into the message, except where aut
 - Notification settings dont save, gotta fix but will do later.
 - Themeing/syncing with a "rice" will be something i hope to implement next!
 - reply highlights will be next update or a patch later on in the night (probably at 1am)
+- performance mode doesnt do much for clamshells from the 2000's (so far.)
+- "Failed to load guild members: 504 Gateway Timeout Gateway timeout." I believe this happens in servers with members lists that are disabled, so it is PROBABLY intended.
 - Open a **feature request** issue for anything you want that is not here yet.
 
 ## License
