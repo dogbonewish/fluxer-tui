@@ -170,7 +170,8 @@ Plain letters (without **Ctrl**) are inserted into the message, except where aut
 
 - **Markdown** parser is still hand-crafted with duct-tape and incomplete.
 - **Voice** is view-only; no join/transmit/hear.
-- reply highlights are currently broken
+- Notification settings dont save, gotta fix but will do later.
+- reply highlights will be next update or a patch later on in the night (probably at 1am)
 - Open a **feature request** issue for anything you want that is not here yet.
 
 ## License
