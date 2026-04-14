@@ -148,3 +148,11 @@ pub fn first_message_preview_media(msg: &MessageResponse) -> Option<MessagePrevi
 
     None
 }
+
+// Caught you
+// Sniffing my boxers
+// Who the fuck does that at Red Lobster ?
+// Creepy
+// Like when Tom Cruise laughs
+// That's how your finger
+// Felt in my ass

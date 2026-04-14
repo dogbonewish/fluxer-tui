@@ -56,9 +56,7 @@ pub fn open_file_path(path: &Path) -> io::Result<()> {
     #[cfg(target_os = "windows")]
     {
         let s = path.as_os_str().to_string_lossy().into_owned();
-        let st = Command::new("cmd")
-            .args(["/C", "start", "", &s])
-            .status()?;
+        let st = Command::new("cmd").args(["/C", "start", "", &s]).status()?;
         return command_ok("cmd /C start", st);
     }
     #[cfg(all(unix, not(target_os = "macos")))]

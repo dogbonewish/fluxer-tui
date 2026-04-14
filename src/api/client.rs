@@ -1,7 +1,8 @@
 use crate::api::types::{
     ChannelResponse, CreateMessageRequest, EditMessageRequest, GatewayBotResponse, GuildResponse,
     HandoffInitiateResponse, HandoffStatusResponse, MessageQuery, MessageResponse,
-    UserPrivateResponse, UserSettingsResponse, WellKnownFluxerResponse,
+    UserGuildSettingsPatch, UserGuildSettingsResponse, UserPrivateResponse, UserSettingsResponse,
+    WellKnownFluxerResponse,
 };
 use anyhow::{Context, Result, anyhow, bail};
 use reqwest::{Method, StatusCode};
@@ -43,6 +44,8 @@ impl FluxerHttpClient {
             "Mozilla/5.0 ({platform_token}; {os_token}; {arch}) FluxerTUI/{}",
             env!("CARGO_PKG_VERSION")
         );
+
+        // isreali GPT was here... Beep Boop. (joke)\
 
         Ok(Self {
             inner: reqwest::Client::builder()
@@ -99,6 +102,25 @@ impl FluxerHttpClient {
             "/users/@me/settings",
             None::<&()>,
             None::<&()>,
+            false,
+        )
+        .await
+    }
+
+    pub async fn update_user_guild_settings(
+        &self,
+        guild_id: Option<&str>,
+        body: &UserGuildSettingsPatch,
+    ) -> Result<UserGuildSettingsResponse> {
+        let path = match guild_id {
+            Some(guild_id) => format!("/users/@me/guilds/{guild_id}/settings"),
+            None => "/users/@me/guilds/@me/settings".to_string(),
+        };
+        self.send_json::<(), UserGuildSettingsPatch, UserGuildSettingsResponse>(
+            Method::PATCH,
+            &path,
+            None::<&()>,
+            Some(body),
             false,
         )
         .await

@@ -70,7 +70,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         } else {
             Style::default().fg(crate::ui::theme::TEXT)
         };
-        items.push(ListItem::new(Line::from(Span::styled(entry.label.clone(), style))));
+        items.push(ListItem::new(Line::from(Span::styled(
+            entry.label.clone(),
+            style,
+        ))));
     }
 
     let title = format!(

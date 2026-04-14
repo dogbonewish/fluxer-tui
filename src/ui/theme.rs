@@ -52,9 +52,7 @@ pub fn rgb_pack_to_color(packed: u32) -> Color {
 
 pub fn role_mention_style(color: u32) -> Style {
     if color == 0 {
-        Style::default()
-            .fg(ACCENT)
-            .add_modifier(Modifier::BOLD)
+        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(rgb_pack_to_color(color))
     }

@@ -1,8 +1,8 @@
 [package]
 name = "fluxer-tui"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2024"
-description = "A terminal-based chat client for the Fluxer messaging platform"
+description = "A TUI chat client for the Fluxer messaging platform"
 license = "MIT"
 repository = "https://github.com/dogbonewish/fluxer-tui"
 readme = "README.md"

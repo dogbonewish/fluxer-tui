@@ -1,6 +1,7 @@
 //! Fluxer-style message markup for the TUI: **bold**, `code`, __underline__, ~~strike~~,
 //! ||spoiler||, #- subtext, # headings, blockquotes, and ::: admonition fences.
 //! Its not very good but eh, its something! i will improve it in the future :3
+//! half of this does not properly work, so i'll have to fix it :(
 
 use crate::app::App;
 use ratatui::style::{Color, Modifier, Style};
@@ -8,6 +9,7 @@ use ratatui::text::Span;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Delim {
     Bold,
+    Italic,
     Code,
     Under,
     Strike,
@@ -18,11 +20,16 @@ impl Delim {
     fn open(self) -> &'static str {
         match self {
             Delim::Bold => "**",
+            Delim::Italic => "*",
             Delim::Code => "`",
             Delim::Under => "__",
             Delim::Strike => "~~",
             Delim::Spoiler => "||",
         }
+    }
+
+    fn close(self) -> &'static str {
+        self.open()
     }
 }
 
@@ -334,10 +341,7 @@ pub fn parse_message_spans(text: &str, app: &App) -> Vec<Span<'static>> {
                             let is_self = id == app.me.id;
                             let g = app.guild_id_for_active_channel();
                             let fg = app.member_name_color(g.as_deref(), id.as_str(), is_self);
-                            spans.push(Span::styled(
-                                format!("@{name}"),
-                                Style::default().fg(fg),
-                            ));
+                            spans.push(Span::styled(format!("@{name}"), Style::default().fg(fg)));
                         }
                     } else {
                         buf.push('<');
@@ -442,8 +446,50 @@ fn collect_until_close(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> 
     String::new()
 }
 
+enum SpecialMatch<'a> {
+    Delim {
+        idx: usize,
+        delim: Delim,
+    },
+    Link {
+        idx: usize,
+        end: usize,
+        label: &'a str,
+    },
+    Autolink {
+        idx: usize,
+        end: usize,
+        url: &'a str,
+    },
+}
+
+impl SpecialMatch<'_> {
+    fn idx(&self) -> usize {
+        match self {
+            Self::Delim { idx, .. } | Self::Link { idx, .. } | Self::Autolink { idx, .. } => *idx,
+        }
+    }
+}
+
+fn is_italic_boundary(ch: Option<char>) -> bool {
+    ch.is_none_or(|ch| ch.is_whitespace() || (!ch.is_alphanumeric() && ch != '_'))
+}
+
+fn can_open_italic(text: &str, idx: usize) -> bool {
+    let prev = text[..idx].chars().next_back();
+    let next = text[idx + 1..].chars().next();
+    next.is_some_and(|ch| !ch.is_whitespace() && ch != '*') && is_italic_boundary(prev)
+}
+
+fn can_close_italic(text: &str, idx: usize) -> bool {
+    let prev = text[..idx].chars().next_back();
+    let next = text[idx + 1..].chars().next();
+    prev.is_some_and(|ch| !ch.is_whitespace() && ch != '*') && is_italic_boundary(next)
+}
+
 fn next_delim(rest: &str) -> Option<(usize, Delim)> {
     let mut best: Option<(usize, Delim)> = None;
+    // Note: order matters - check ** BEFORE *, so ** doesn't get caught as two *
     for (pat, d) in [
         ("**", Delim::Bold),
         ("__", Delim::Under),
@@ -459,6 +505,23 @@ fn next_delim(rest: &str) -> Option<(usize, Delim)> {
             });
         }
     }
+    for (idx, ch) in rest.char_indices() {
+        if ch != '*' {
+            continue;
+        }
+        if rest.as_bytes().get(idx.saturating_sub(1)) == Some(&b'*')
+            || rest.as_bytes().get(idx + 1) == Some(&b'*')
+            || !can_open_italic(rest, idx)
+        {
+            continue;
+        }
+        best = Some(match best {
+            None => (idx, Delim::Italic),
+            Some((j, _)) if idx < j => (idx, Delim::Italic),
+            Some(existing) => existing,
+        });
+        break;
+    }
     best
 }
 
@@ -470,72 +533,178 @@ fn flush_markdown_buffer(buf: &mut String, spans: &mut Vec<Span<'static>>, app: 
     parse_markdown_segments(&text, spans, app, base);
 }
 
+fn find_link(text: &str) -> Option<(usize, usize, &str)> {
+    for (open, ch) in text.char_indices() {
+        if ch != '[' {
+            continue;
+        }
+        if text[..open].chars().next_back() == Some('!') {
+            continue;
+        }
+        let close_bracket = text[open + 1..].find(']')? + open + 1;
+        if text.as_bytes().get(close_bracket + 1) != Some(&b'(') {
+            continue;
+        }
+        let url_start = close_bracket + 2;
+        let url_end = text[url_start..].find(')')? + url_start;
+        if url_start == url_end {
+            continue;
+        }
+        return Some((open, url_end + 1, &text[open + 1..close_bracket]));
+    }
+    None
+}
+
+fn find_autolink(text: &str) -> Option<(usize, usize, &str)> {
+    for (open, ch) in text.char_indices() {
+        if ch != '<' {
+            continue;
+        }
+        let url_start = open + 1;
+        let url_end = text[url_start..].find('>')? + url_start;
+        let url = &text[url_start..url_end];
+        if url.starts_with("http://") || url.starts_with("https://") {
+            return Some((open, url_end + 1, url));
+        }
+    }
+    None
+}
+
+fn next_special(rest: &str) -> Option<SpecialMatch<'_>> {
+    let mut best = next_delim(rest).map(|(idx, delim)| SpecialMatch::Delim { idx, delim });
+
+    if let Some((idx, end, label)) = find_link(rest)
+        && best.as_ref().is_none_or(|current| idx < current.idx())
+    {
+        best = Some(SpecialMatch::Link { idx, end, label });
+    }
+
+    if let Some((idx, end, url)) = find_autolink(rest)
+        && best.as_ref().is_none_or(|current| idx < current.idx())
+    {
+        best = Some(SpecialMatch::Autolink { idx, end, url });
+    }
+
+    best
+}
+
+fn find_matching_italic_close(text: &str) -> Option<usize> {
+    for (idx, ch) in text.char_indices() {
+        if ch != '*'
+            || text.as_bytes().get(idx.saturating_sub(1)) == Some(&b'*')
+            || text.as_bytes().get(idx + 1) == Some(&b'*')
+            || !can_close_italic(text, idx)
+        {
+            continue;
+        }
+        return Some(idx);
+    }
+    None
+}
+
 fn parse_markdown_segments(text: &str, spans: &mut Vec<Span<'static>>, app: &App, base: Style) {
     let mut rest = text;
     while !rest.is_empty() {
-        let Some((idx, delim)) = next_delim(rest) else {
+        let Some(next) = next_special(rest) else {
             flush_text_with_emoji_str(rest, spans, base);
             return;
         };
+        let idx = next.idx();
         if idx > 0 {
             flush_text_with_emoji_str(&rest[..idx], spans, base);
         }
-        let open = delim.open();
-        rest = &rest[idx + open.len()..];
-        let close_pat = delim.open();
-        if let Some(close_idx) = rest.find(close_pat) {
-            let inner = &rest[..close_idx];
-            rest = &rest[close_idx + close_pat.len()..];
-            match delim {
-                Delim::Bold => {
-                    let inner_spans = parse_message_spans(inner, app);
-                    for s in inner_spans {
-                        spans.push(Span::styled(
-                            s.content.to_string(),
-                            s.style.add_modifier(Modifier::BOLD),
-                        ));
-                    }
-                }
-                Delim::Under => {
-                    let inner_spans = parse_message_spans(inner, app);
-                    for s in inner_spans {
-                        spans.push(Span::styled(
-                            s.content.to_string(),
-                            s.style.add_modifier(Modifier::UNDERLINED),
-                        ));
-                    }
-                }
-                Delim::Strike => {
-                    let inner_spans = parse_message_spans(inner, app);
-                    for s in inner_spans {
-                        spans.push(Span::styled(
-                            s.content.to_string(),
-                            s.style.add_modifier(Modifier::CROSSED_OUT),
-                        ));
-                    }
-                }
-                Delim::Spoiler => {
-                    let inner_spans = parse_message_spans(inner, app);
-                    for s in inner_spans {
-                        spans.push(Span::styled(
-                            s.content.to_string(),
-                            s.style
-                                .fg(crate::ui::theme::TEXT_MUTED)
-                                .add_modifier(Modifier::DIM),
-                        ));
-                    }
-                }
-                Delim::Code => {
+
+        match next {
+            SpecialMatch::Link { end, label, .. } => {
+                let link_style = Style::default().fg(crate::ui::theme::LINK_COLOR);
+                for s in parse_message_spans(label, app) {
                     spans.push(Span::styled(
-                        inner.to_string(),
-                        Style::default()
-                            .fg(crate::ui::theme::TEXT)
-                            .bg(crate::ui::theme::BG_TERTIARY),
+                        s.content.to_string(),
+                        s.style.patch(link_style),
                     ));
                 }
+                rest = &rest[end..];
+                continue;
             }
-        } else {
-            flush_text_with_emoji_str(open, spans, base);
+            SpecialMatch::Autolink { end, url, .. } => {
+                spans.push(Span::styled(
+                    url.to_string(),
+                    base.patch(Style::default().fg(crate::ui::theme::LINK_COLOR)),
+                ));
+                rest = &rest[end..];
+                continue;
+            }
+            SpecialMatch::Delim { delim, .. } => {
+                let open = delim.open();
+                rest = &rest[idx + open.len()..];
+                let close_idx = match delim {
+                    Delim::Italic => find_matching_italic_close(rest),
+                    _ => rest.find(delim.close()),
+                };
+                let Some(close_idx) = close_idx else {
+                    flush_text_with_emoji_str(open, spans, base);
+                    continue;
+                };
+                let inner = &rest[..close_idx];
+                rest = &rest[close_idx + delim.close().len()..];
+                match delim {
+                    Delim::Bold => {
+                        let inner_spans = parse_message_spans(inner, app);
+                        for s in inner_spans {
+                            spans.push(Span::styled(
+                                s.content.to_string(),
+                                s.style.add_modifier(Modifier::BOLD),
+                            ));
+                        }
+                    }
+                    Delim::Under => {
+                        let inner_spans = parse_message_spans(inner, app);
+                        for s in inner_spans {
+                            spans.push(Span::styled(
+                                s.content.to_string(),
+                                s.style.add_modifier(Modifier::UNDERLINED),
+                            ));
+                        }
+                    }
+                    Delim::Strike => {
+                        let inner_spans = parse_message_spans(inner, app);
+                        for s in inner_spans {
+                            spans.push(Span::styled(
+                                s.content.to_string(),
+                                s.style.add_modifier(Modifier::CROSSED_OUT),
+                            ));
+                        }
+                    }
+                    Delim::Spoiler => {
+                        let inner_spans = parse_message_spans(inner, app);
+                        for s in inner_spans {
+                            spans.push(Span::styled(
+                                s.content.to_string(),
+                                s.style
+                                    .fg(crate::ui::theme::TEXT_MUTED)
+                                    .add_modifier(Modifier::DIM),
+                            ));
+                        }
+                    }
+                    Delim::Italic => {
+                        let inner_spans = parse_message_spans(inner, app);
+                        for s in inner_spans {
+                            spans.push(Span::styled(
+                                s.content.to_string(),
+                                s.style.add_modifier(Modifier::ITALIC),
+                            ));
+                        }
+                    }
+                    Delim::Code => {
+                        spans.push(Span::styled(
+                            inner.to_string(),
+                            Style::default()
+                                .fg(crate::ui::theme::TEXT)
+                                .bg(crate::ui::theme::BG_TERTIARY),
+                        ));
+                    }
+                }
+            }
         }
     }
 }
@@ -596,10 +765,7 @@ fn role_mention_span(app: &App, role_id: &str) -> Span<'static> {
             fallback.add_modifier(Modifier::UNDERLINED),
         );
     };
-    let Some(role) = roles
-        .iter()
-        .find(|r| r.id.trim() == role_id.trim())
-    else {
+    let Some(role) = roles.iter().find(|r| r.id.trim() == role_id.trim()) else {
         return Span::styled(format!("@role-{tail}"), fallback);
     };
     let name = if role.name.trim().is_empty() {
@@ -656,9 +822,77 @@ fn format_discord_timestamp(inner: &str) -> String {
     let parts: Vec<&str> = inner.splitn(2, ':').collect();
     let unix_str = parts[0];
     if let Ok(ts) = unix_str.parse::<i64>()
-        && let Some(dt) = chrono::DateTime::from_timestamp(ts, 0) {
-            let local = dt.with_timezone(&chrono::Local);
-            return local.format("%Y-%m-%d %H:%M").to_string();
-        }
+        && let Some(dt) = chrono::DateTime::from_timestamp(ts, 0)
+    {
+        let local = dt.with_timezone(&chrono::Local);
+        return local.format("%Y-%m-%d %H:%M").to_string();
+    }
     format!("<t:{inner}>")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::types::WellKnownFluxerResponse;
+    use crate::app::ServerSelection;
+    use crate::config::UiSettings;
+
+    fn test_app() -> App {
+        App::new(
+            WellKnownFluxerResponse::default(),
+            crate::api::types::UserPrivateResponse {
+                id: "me".to_string(),
+                ..crate::api::types::UserPrivateResponse::default()
+            },
+            None,
+            Vec::new(),
+            Vec::new(),
+            ServerSelection::DirectMessages,
+            None,
+            UiSettings::default(),
+        )
+    }
+
+    fn joined_text(spans: &[Span<'static>]) -> String {
+        spans.iter().map(|span| span.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn parses_single_asterisk_italics() {
+        let app = test_app();
+        let spans = parse_message_spans("alpha *bravo* charlie", &app);
+
+        assert_eq!(joined_text(&spans), "alpha bravo charlie");
+        assert!(
+            spans.iter().any(|span| span.content == "bravo"
+                && span.style.add_modifier.contains(Modifier::ITALIC))
+        );
+    }
+
+    #[test]
+    fn parses_markdown_links_and_autolinks_without_literal_markup() {
+        let app = test_app();
+        let spans = parse_message_spans(
+            "[Fluxer](https://fluxer.app) and <https://fluxer.app>",
+            &app,
+        );
+
+        assert_eq!(joined_text(&spans), "Fluxer and https://fluxer.app");
+        assert!(
+            spans
+                .iter()
+                .filter(|span| span.style.fg == Some(crate::ui::theme::LINK_COLOR))
+                .map(|span| span.content.as_ref())
+                .collect::<Vec<_>>()
+                .contains(&"Fluxer")
+        );
+        assert!(
+            spans
+                .iter()
+                .filter(|span| span.style.fg == Some(crate::ui::theme::LINK_COLOR))
+                .map(|span| span.content.as_ref())
+                .collect::<Vec<_>>()
+                .contains(&"https://fluxer.app")
+        );
+    }
 }

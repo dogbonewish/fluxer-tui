@@ -8,18 +8,8 @@ use ratatui::widgets::Paragraph;
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let server = match &app.selected_server {
         ServerSelection::DirectMessages => "DMs".to_string(),
-        ServerSelection::Guild(id) => app
-            .guilds
-            .iter()
-            .find(|g| g.id == *id)
-            .map(|g| g.name.clone())
-            .unwrap_or_else(|| id.clone()),
+        ServerSelection::Guild(_) => app.selected_server_name(),
     };
-
-    let channel = app
-        .active_channel()
-        .map(|c| format!("#{}", c.name))
-        .unwrap_or_else(|| "-".to_string());
 
     let status_mid = if app.status_message.is_empty() {
         String::new()
@@ -28,22 +18,16 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     let hints = match app.focus {
-        Focus::Servers => {
-            " · j/k servers · Tab/h/l · l open channels"
-        }
-        Focus::Channels => {
-            " · j/k channels · Tab · Enter msg · i input · R refresh"
-        }
+        Focus::Servers => " · j/k servers · n notifications · Tab/h/l · l open channels",
+        Focus::Channels => " · j/k channels · n notifications · Enter msg · i input · R refresh",
         Focus::Messages => {
             if app.selected_message_index.is_some() {
-                " · r reply · f forward · e react · Ctrl+E edit · Ctrl+D del · [ older · Alt+A"
+                " · r reply · f forward · e react · Ctrl+E edit · Ctrl+D del · Alt+A"
             } else {
-                " · s select · [ older · Alt+A · i input · Ctrl+H help"
+                " · s select · Alt+A · i input · Ctrl+H help"
             }
         }
-        Focus::Input => {
-            " · Ctrl+K picker · Ctrl+N/P channel · Alt+A · Ctrl+H help"
-        }
+        Focus::Input => " · Ctrl+K picker · Ctrl+N/P channel · Alt+A · Ctrl+H help",
     };
 
     let paragraph = Paragraph::new(Line::from(vec![
@@ -53,7 +37,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             crate::ui::theme::gateway_status_style(app.gateway_status),
         ),
         Span::styled(
-            format!(" | {server} | {channel}{status_mid}"),
+            format!(" | {server}{status_mid}"),
             Style::default().fg(crate::ui::theme::TEXT_DIM),
         ),
         Span::styled(hints, Style::default().fg(crate::ui::theme::TEXT_MUTED)),

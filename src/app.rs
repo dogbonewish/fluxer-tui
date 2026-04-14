@@ -6,9 +6,12 @@ use ratatui_image::protocol::StatefulProtocol;
 use crate::api::types::{
     CHANNEL_DM, CHANNEL_DM_PERSONAL_NOTES, CHANNEL_GROUP_DM, CHANNEL_GUILD_CATEGORY,
     CHANNEL_GUILD_LINK, CHANNEL_GUILD_TEXT, CHANNEL_GUILD_VOICE, ChannelResponse,
-    GuildMemberResponse, GuildResponse, MessageResponse, ReadStateResponse, Snowflake,
-    UserPartialResponse, UserPrivateResponse, UserSettingsResponse, VoiceStateResponse,
-    WellKnownFluxerResponse, merge_user_cache, snowflake_sort_key,
+    GuildMemberResponse, GuildResponse, MESSAGE_NOTIFICATIONS_ALL_MESSAGES,
+    MESSAGE_NOTIFICATIONS_INHERIT, MESSAGE_NOTIFICATIONS_NO_MESSAGES,
+    MESSAGE_NOTIFICATIONS_ONLY_MENTIONS, MessageResponse, ReadStateResponse, Snowflake,
+    UserGuildChannelOverride, UserGuildMuteConfig, UserGuildSettingsPatch,
+    UserGuildSettingsResponse, UserPartialResponse, UserPrivateResponse, UserSettingsResponse,
+    VoiceStateResponse, WellKnownFluxerResponse, merge_user_cache, snowflake_sort_key,
 };
 use crate::config::UiSettings;
 use std::collections::{HashMap, HashSet};
@@ -163,6 +166,13 @@ pub struct ReadState {
     pub mention_count: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotificationVisibility {
+    AllMessages,
+    MentionsOnly,
+    None,
+}
+
 pub enum ImagePreviewState {
     Loading {
         title: String,
@@ -228,6 +238,7 @@ pub struct App {
     pub discovery: WellKnownFluxerResponse,
     pub me: UserPrivateResponse,
     pub user_settings: Option<UserSettingsResponse>,
+    pub user_guild_settings: HashMap<Snowflake, UserGuildSettingsResponse>,
     pub guilds: Vec<GuildResponse>,
     pub private_channels: Vec<ChannelResponse>,
     pub guild_channels: HashMap<Snowflake, Vec<ChannelResponse>>,
@@ -245,6 +256,7 @@ pub struct App {
     pub focus: Focus,
     pub input: String,
     pub message_scroll_from_bottom: u16,
+    pub message_scroll_max: u16,
     pub selected_message_index: Option<usize>,
     pub reply_to: Option<ReplyState>,
     pub forward_mode: bool,
@@ -253,6 +265,7 @@ pub struct App {
     pub gateway_status: GatewayStatus,
     pub gateway_lazy_guild_id: Option<String>,
     pub status_message: String,
+    status_message_until: Option<Instant>,
     pub should_quit: bool,
     pub should_logout: bool,
     pub loading_channels: HashSet<String>,
@@ -278,10 +291,22 @@ pub struct App {
     pub image_picker: Option<Picker>,
     pub show_settings: bool,
     pub settings_cursor: usize,
+    pub show_server_notifications: bool,
+    pub server_notification_cursor: usize,
+    pub server_notification_scroll: u16,
     pub ui_settings: UiSettings,
 }
 
 impl App {
+    const DM_SETTINGS_KEY: &'static str = "@me";
+    const SERVER_MUTE_PRESET_MS: [u64; 5] = [
+        15 * 60 * 1000,
+        60 * 60 * 1000,
+        3 * 60 * 60 * 1000,
+        8 * 60 * 60 * 1000,
+        24 * 60 * 60 * 1000,
+    ];
+
     pub fn new(
         discovery: WellKnownFluxerResponse,
         me: UserPrivateResponse,
@@ -304,6 +329,7 @@ impl App {
             discovery,
             me,
             user_settings,
+            user_guild_settings: HashMap::new(),
             guilds,
             private_channels,
             guild_channels: HashMap::new(),
@@ -321,6 +347,7 @@ impl App {
             focus: Focus::Channels,
             input: String::new(),
             message_scroll_from_bottom: 0,
+            message_scroll_max: 0,
             selected_message_index: None,
             reply_to: None,
             forward_mode: false,
@@ -329,6 +356,7 @@ impl App {
             gateway_status: GatewayStatus::Disconnected,
             gateway_lazy_guild_id: None,
             status_message: String::new(),
+            status_message_until: None,
             should_quit: false,
             should_logout: false,
             loading_channels: HashSet::new(),
@@ -354,18 +382,426 @@ impl App {
             image_picker: None,
             show_settings: false,
             settings_cursor: 0,
+            show_server_notifications: false,
+            server_notification_cursor: 0,
+            server_notification_scroll: 0,
             ui_settings,
         };
         app.normalize_selection();
         app
     }
 
-    pub const UI_SETTINGS_LAST_ROW: usize = 0;
+    pub const UI_SETTINGS_LAST_ROW: usize = 1;
+    pub const SERVER_NOTIFICATION_LAST_ROW: usize = 5;
+    pub const HISTORY_AUTOLOAD_THRESHOLD_ROWS: u16 = 3;
+    pub const TRANSIENT_STATUS_DURATION: Duration = Duration::from_millis(1800);
+
+    fn user_guild_settings_key(guild_id: Option<&str>) -> String {
+        guild_id.unwrap_or(Self::DM_SETTINGS_KEY).to_string()
+    }
+
+    fn default_user_guild_settings(guild_id: Option<&str>) -> UserGuildSettingsResponse {
+        UserGuildSettingsResponse {
+            guild_id: guild_id.map(str::to_string),
+            message_notifications: if guild_id.is_some() {
+                MESSAGE_NOTIFICATIONS_INHERIT
+            } else {
+                MESSAGE_NOTIFICATIONS_ALL_MESSAGES
+            },
+            muted: false,
+            mute_config: None,
+            mobile_push: guild_id.is_some(),
+            suppress_everyone: false,
+            suppress_roles: false,
+            hide_muted_channels: false,
+            channel_overrides: HashMap::new(),
+            version: 0,
+        }
+    }
+
+    fn mute_active(muted: bool, mute_config: Option<&UserGuildMuteConfig>) -> bool {
+        if !muted {
+            return false;
+        }
+        let Some(end_time) = mute_config.and_then(|config| config.end_time.as_deref()) else {
+            return true;
+        };
+        chrono::DateTime::parse_from_rfc3339(end_time)
+            .map(|deadline| deadline.with_timezone(&chrono::Utc) > chrono::Utc::now())
+            .unwrap_or(true)
+    }
+
+    fn sanitize_user_guild_settings(
+        mut settings: UserGuildSettingsResponse,
+    ) -> UserGuildSettingsResponse {
+        if !Self::mute_active(settings.muted, settings.mute_config.as_ref()) {
+            settings.muted = false;
+            settings.mute_config = None;
+        }
+        settings.channel_overrides.retain(|_, override_settings| {
+            if Self::mute_active(override_settings.muted, override_settings.mute_config.as_ref()) {
+                true
+            } else {
+                override_settings.muted = false;
+                override_settings.mute_config = None;
+                true
+            }
+        });
+        settings
+    }
+
+    pub fn selected_server_name(&self) -> String {
+        match &self.selected_server {
+            ServerSelection::DirectMessages => "Direct Messages".to_string(),
+            ServerSelection::Guild(id) => self
+                .guilds
+                .iter()
+                .find(|guild| guild.id == *id)
+                .map(|guild| guild.name.clone())
+                .unwrap_or_else(|| id.clone()),
+        }
+    }
+
+    pub fn selected_server_guild_id(&self) -> Option<String> {
+        match &self.selected_server {
+            ServerSelection::DirectMessages => None,
+            ServerSelection::Guild(id) => Some(id.clone()),
+        }
+    }
+
+    fn user_guild_settings_for(&self, guild_id: Option<&str>) -> UserGuildSettingsResponse {
+        self.user_guild_settings
+            .get(Self::user_guild_settings_key(guild_id).as_str())
+            .cloned()
+            .map(Self::sanitize_user_guild_settings)
+            .unwrap_or_else(|| Self::default_user_guild_settings(guild_id))
+    }
+
+    fn user_guild_settings_mut_or_default(
+        &mut self,
+        guild_id: Option<&str>,
+    ) -> &mut UserGuildSettingsResponse {
+        let key = Self::user_guild_settings_key(guild_id);
+        self.user_guild_settings
+            .entry(key)
+            .or_insert_with(|| Self::default_user_guild_settings(guild_id))
+    }
+
+    pub fn selected_server_notification_settings(&self) -> Option<UserGuildSettingsResponse> {
+        let guild_id = self.selected_server_guild_id()?;
+        Some(self.user_guild_settings_for(Some(&guild_id)))
+    }
+
+    pub fn set_user_guild_settings(&mut self, settings: Vec<UserGuildSettingsResponse>) {
+        self.user_guild_settings.clear();
+        for settings_entry in settings {
+            self.upsert_user_guild_settings(settings_entry);
+        }
+    }
+
+    pub fn upsert_user_guild_settings(&mut self, settings: UserGuildSettingsResponse) {
+        let key = Self::user_guild_settings_key(settings.guild_id.as_deref());
+        self.user_guild_settings
+            .insert(key, Self::sanitize_user_guild_settings(settings));
+        self.normalize_selection();
+    }
+
+    pub fn apply_user_guild_settings_patch(
+        &mut self,
+        guild_id: Option<&str>,
+        patch: &UserGuildSettingsPatch,
+    ) {
+        let settings = self.user_guild_settings_mut_or_default(guild_id);
+        if let Some(value) = patch.message_notifications {
+            settings.message_notifications = value;
+        }
+        if let Some(value) = patch.muted {
+            settings.muted = value;
+        }
+        if let Some(value) = &patch.mute_config {
+            settings.mute_config = value.clone();
+        }
+        if let Some(value) = patch.mobile_push {
+            settings.mobile_push = value;
+        }
+        if let Some(value) = patch.suppress_everyone {
+            settings.suppress_everyone = value;
+        }
+        if let Some(value) = patch.suppress_roles {
+            settings.suppress_roles = value;
+        }
+        if let Some(value) = patch.hide_muted_channels {
+            settings.hide_muted_channels = value;
+        }
+
+        let sanitized = Self::sanitize_user_guild_settings(settings.clone());
+        *settings = sanitized;
+        self.normalize_selection();
+    }
+
+    pub fn open_server_notification_settings(&mut self) -> bool {
+        let Some(_) = self.selected_server_guild_id() else {
+            self.set_status("Select a community to edit its notification settings.");
+            return false;
+        };
+        self.dismiss_image_preview();
+        self.show_server_notifications = true;
+        self.server_notification_cursor = 0;
+        self.server_notification_scroll = 0;
+        true
+    }
+
+    pub fn current_server_mute_choice_index(&self) -> Option<usize> {
+        let settings = self.selected_server_notification_settings()?;
+        if !Self::mute_active(settings.muted, settings.mute_config.as_ref()) {
+            return Some(0);
+        }
+        let preset = settings
+            .mute_config
+            .as_ref()
+            .and_then(|config| config.selected_time_window);
+        if let Some(window) = preset
+            && let Some(index) = Self::SERVER_MUTE_PRESET_MS
+                .iter()
+                .position(|candidate| *candidate == window)
+        {
+            return Some(index + 1);
+        }
+        Some(Self::SERVER_MUTE_PRESET_MS.len() + 1)
+    }
+
+    pub fn cycle_server_notification_setting(
+        &mut self,
+        delta: i32,
+    ) -> Option<(String, UserGuildSettingsPatch)> {
+        let guild_id = self.selected_server_guild_id()?;
+        let settings = self.user_guild_settings_for(Some(&guild_id));
+
+        let patch = match self.server_notification_cursor {
+            0 => {
+                let option_count = Self::SERVER_MUTE_PRESET_MS.len() as i32 + 2;
+                let current = self.current_server_mute_choice_index()? as i32;
+                let next = (current + delta).rem_euclid(option_count) as usize;
+                if next == 0 {
+                    UserGuildSettingsPatch {
+                        muted: Some(false),
+                        mute_config: Some(None),
+                        ..UserGuildSettingsPatch::default()
+                    }
+                } else if next == Self::SERVER_MUTE_PRESET_MS.len() + 1 {
+                    UserGuildSettingsPatch {
+                        muted: Some(true),
+                        mute_config: Some(None),
+                        ..UserGuildSettingsPatch::default()
+                    }
+                } else {
+                    let window = Self::SERVER_MUTE_PRESET_MS[next - 1];
+                    UserGuildSettingsPatch {
+                        muted: Some(true),
+                        mute_config: Some(Some(UserGuildMuteConfig {
+                            end_time: Some(
+                                (chrono::Utc::now()
+                                    + chrono::Duration::milliseconds(window as i64))
+                                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                            ),
+                            selected_time_window: Some(window),
+                        })),
+                        ..UserGuildSettingsPatch::default()
+                    }
+                }
+            }
+            1 => {
+                let options = [
+                    MESSAGE_NOTIFICATIONS_ALL_MESSAGES,
+                    MESSAGE_NOTIFICATIONS_ONLY_MENTIONS,
+                    MESSAGE_NOTIFICATIONS_NO_MESSAGES,
+                ];
+                let current = self.resolved_message_notifications_for_guild(&guild_id);
+                let current_index = options
+                    .iter()
+                    .position(|candidate| *candidate == current)
+                    .unwrap_or(0) as i32;
+                let next = (current_index + delta).rem_euclid(options.len() as i32) as usize;
+                UserGuildSettingsPatch {
+                    message_notifications: Some(options[next]),
+                    ..UserGuildSettingsPatch::default()
+                }
+            }
+            2 => UserGuildSettingsPatch {
+                suppress_everyone: Some(!settings.suppress_everyone),
+                ..UserGuildSettingsPatch::default()
+            },
+            3 => UserGuildSettingsPatch {
+                suppress_roles: Some(!settings.suppress_roles),
+                ..UserGuildSettingsPatch::default()
+            },
+            4 => UserGuildSettingsPatch {
+                hide_muted_channels: Some(!settings.hide_muted_channels),
+                ..UserGuildSettingsPatch::default()
+            },
+            5 => UserGuildSettingsPatch {
+                mobile_push: Some(!settings.mobile_push),
+                ..UserGuildSettingsPatch::default()
+            },
+            _ => return None,
+        };
+
+        self.apply_user_guild_settings_patch(Some(&guild_id), &patch);
+        Some((guild_id, patch))
+    }
 
     pub fn toggle_settings_selection(&mut self) {
-        if self.settings_cursor == 0 {
-            self.ui_settings.clock_12h = !self.ui_settings.clock_12h;
+        match self.settings_cursor {
+            0 => {
+                self.ui_settings.clock_12h = !self.ui_settings.clock_12h;
+            }
+            1 => {
+                self.ui_settings.show_typing_indicators = !self.ui_settings.show_typing_indicators;
+            }
+            _ => {}
         }
+    }
+
+    pub fn suppress_everyone_enabled(&self, guild_id: Option<&str>) -> bool {
+        guild_id
+            .map(|id| self.user_guild_settings_for(Some(id)).suppress_everyone)
+            .unwrap_or(false)
+    }
+
+    pub fn suppress_roles_enabled(&self, guild_id: Option<&str>) -> bool {
+        guild_id
+            .map(|id| self.user_guild_settings_for(Some(id)).suppress_roles)
+            .unwrap_or(false)
+    }
+
+    pub fn hide_muted_channels_enabled(&self, guild_id: &str) -> bool {
+        self.user_guild_settings_for(Some(guild_id)).hide_muted_channels
+    }
+
+    pub fn guild_is_muted(&self, guild_id: Option<&str>) -> bool {
+        let settings = self.user_guild_settings_for(guild_id);
+        Self::mute_active(settings.muted, settings.mute_config.as_ref())
+    }
+
+    pub fn channel_override(
+        &self,
+        guild_id: Option<&str>,
+        channel_id: &str,
+    ) -> Option<UserGuildChannelOverride> {
+        self.user_guild_settings_for(guild_id)
+            .channel_overrides
+            .get(channel_id)
+            .cloned()
+    }
+
+    pub fn channel_is_muted_directly(&self, channel: &ChannelResponse) -> bool {
+        self.channel_override(channel.guild_id.as_deref(), &channel.id)
+            .is_some_and(|override_settings| {
+                Self::mute_active(override_settings.muted, override_settings.mute_config.as_ref())
+            })
+    }
+
+    pub fn channel_parent_is_muted(&self, channel: &ChannelResponse) -> bool {
+        let Some(parent_id) = channel.parent_id.as_deref() else {
+            return false;
+        };
+        self.channel_override(channel.guild_id.as_deref(), parent_id)
+            .is_some_and(|override_settings| {
+                Self::mute_active(override_settings.muted, override_settings.mute_config.as_ref())
+            })
+    }
+
+    pub fn channel_is_muted_effective(&self, channel: &ChannelResponse) -> bool {
+        self.guild_is_muted(channel.guild_id.as_deref())
+            || self.channel_parent_is_muted(channel)
+            || self.channel_is_muted_directly(channel)
+    }
+
+    pub fn resolved_message_notifications_for_guild(&self, guild_id: &str) -> i32 {
+        let settings = self.user_guild_settings_for(Some(guild_id));
+        if settings.message_notifications != MESSAGE_NOTIFICATIONS_INHERIT {
+            return settings.message_notifications;
+        }
+        self.guilds
+            .iter()
+            .find(|guild| guild.id == guild_id)
+            .map(|guild| guild.default_message_notifications)
+            .unwrap_or(MESSAGE_NOTIFICATIONS_ALL_MESSAGES)
+    }
+
+    pub fn resolved_message_notifications(&self, channel: &ChannelResponse) -> i32 {
+        let guild_id = channel.guild_id.as_deref();
+        let Some(guild_id) = guild_id else {
+            return self
+                .channel_override(None, &channel.id)
+                .map(|override_settings| override_settings.message_notifications)
+                .filter(|level| *level != MESSAGE_NOTIFICATIONS_INHERIT)
+                .unwrap_or(MESSAGE_NOTIFICATIONS_ALL_MESSAGES);
+        };
+
+        if let Some(override_settings) = self.channel_override(Some(guild_id), &channel.id)
+            && override_settings.message_notifications != MESSAGE_NOTIFICATIONS_INHERIT
+        {
+            return override_settings.message_notifications;
+        }
+
+        if let Some(parent_id) = channel.parent_id.as_deref()
+            && let Some(parent_override) = self.channel_override(Some(guild_id), parent_id)
+            && parent_override.message_notifications != MESSAGE_NOTIFICATIONS_INHERIT
+        {
+            return parent_override.message_notifications;
+        }
+
+        self.resolved_message_notifications_for_guild(guild_id)
+    }
+
+    pub fn channel_notification_visibility(
+        &self,
+        channel: &ChannelResponse,
+    ) -> NotificationVisibility {
+        let level = self.resolved_message_notifications(channel);
+        if level == MESSAGE_NOTIFICATIONS_NO_MESSAGES {
+            return NotificationVisibility::None;
+        }
+        if self.channel_is_muted_effective(channel)
+            || level == MESSAGE_NOTIFICATIONS_ONLY_MENTIONS
+        {
+            return NotificationVisibility::MentionsOnly;
+        }
+        NotificationVisibility::AllMessages
+    }
+
+    pub fn visible_channel_is_unread(&self, channel_id: &str) -> bool {
+        let Some(channel) = self.channel_by_id(channel_id) else {
+            return false;
+        };
+        self.channel_notification_visibility(&channel) == NotificationVisibility::AllMessages
+            && self.channel_is_unread(channel_id)
+    }
+
+    pub fn visible_channel_mention_count(&self, channel_id: &str) -> u64 {
+        let Some(channel) = self.channel_by_id(channel_id) else {
+            return 0;
+        };
+        match self.channel_notification_visibility(&channel) {
+            NotificationVisibility::None => 0,
+            NotificationVisibility::AllMessages | NotificationVisibility::MentionsOnly => {
+                self.channel_mention_count(channel_id)
+            }
+        }
+    }
+
+    fn channel_hidden_in_sidebar(&self, channel: &ChannelResponse) -> bool {
+        let Some(guild_id) = channel.guild_id.as_deref() else {
+            return false;
+        };
+        if !self.hide_muted_channels_enabled(guild_id) {
+            return false;
+        }
+        if self.selected_channel_id.as_deref() == Some(channel.id.as_str()) {
+            return false;
+        }
+        self.channel_is_muted_effective(channel)
     }
 
     pub const API_FAILURE_BACKOFF_SECS: u64 = 180;
@@ -483,7 +919,7 @@ impl App {
         true
     }
 
-    pub fn channels_for_server(&self, server: &ServerSelection) -> Vec<ChannelResponse> {
+    pub fn all_channels_for_server(&self, server: &ServerSelection) -> Vec<ChannelResponse> {
         match server {
             ServerSelection::DirectMessages => {
                 let mut dms = self.private_channels.clone();
@@ -533,12 +969,12 @@ impl App {
                 }
 
                 for cat in &categories {
-                    result.push((*cat).clone());
                     let children: Vec<&ChannelResponse> = non_cat
                         .iter()
                         .filter(|c| c.parent_id.as_deref() == Some(cat.id.as_str()))
                         .copied()
                         .collect();
+                    result.push((*cat).clone());
                     for ch in children {
                         result.push(ch.clone());
                     }
@@ -547,6 +983,39 @@ impl App {
                 result
             }
         }
+    }
+
+    pub fn channels_for_server(&self, server: &ServerSelection) -> Vec<ChannelResponse> {
+        let all = self.all_channels_for_server(server);
+        let ServerSelection::Guild(guild_id) = server else {
+            return all;
+        };
+        if !self.hide_muted_channels_enabled(guild_id) {
+            return all;
+        }
+
+        let mut visible = Vec::new();
+        for channel in all {
+            if channel.channel_type() == CHANNEL_GUILD_CATEGORY {
+                let has_visible_children = self
+                    .guild_channels
+                    .get(guild_id)
+                    .into_iter()
+                    .flat_map(|channels| channels.iter())
+                    .any(|candidate| {
+                        candidate.parent_id.as_deref() == Some(channel.id.as_str())
+                            && !self.channel_hidden_in_sidebar(candidate)
+                    });
+                if has_visible_children {
+                    visible.push(channel);
+                }
+                continue;
+            }
+            if !self.channel_hidden_in_sidebar(&channel) {
+                visible.push(channel);
+            }
+        }
+        visible
     }
 
     pub fn channel_entries(&self) -> Vec<ChannelResponse> {
@@ -624,7 +1093,7 @@ impl App {
     pub fn navigable_channel_pairs(&self) -> Vec<(ServerSelection, String)> {
         let mut out = Vec::new();
         for server in self.server_entries() {
-            for ch in self.channels_for_server(&server) {
+            for ch in self.all_channels_for_server(&server) {
                 if ch.channel_type() == CHANNEL_GUILD_CATEGORY {
                     continue;
                 }
@@ -658,7 +1127,8 @@ impl App {
         for step in 1..flat.len() {
             let i = (pos + step) % flat.len();
             let (srv, cid) = &flat[i];
-            if self.channel_is_unread(cid) || self.channel_mention_count(cid) > 0 {
+            if self.visible_channel_is_unread(cid) || self.visible_channel_mention_count(cid) > 0
+            {
                 return Some((srv.clone(), cid.clone()));
             }
         }
@@ -821,33 +1291,34 @@ impl App {
     }
 
     fn message_notifies_me(&self, message: &MessageResponse) -> bool {
+        let Some(channel) = self.channel_by_id(&message.channel_id) else {
+            return message.mentions.iter().any(|user| user.id == self.me.id);
+        };
+        if self.channel_notification_visibility(&channel) == NotificationVisibility::None {
+            return false;
+        }
         if message.mentions.iter().any(|u| u.id == self.me.id) {
             return true;
         }
-        if !message.mention_roles.is_empty() {
-            if let Some(ch) = self.channel_by_id(&message.channel_id) {
-                if let Some(gid) = ch.guild_id.as_deref() {
-                    if let Some(roles) = self
-                        .guild_members
-                        .get(gid)
-                        .and_then(|mems| mems.iter().find(|m| m.user.id == self.me.id))
-                        .map(|m| m.roles.as_slice())
-                        && message.mention_roles.iter().any(|rid| roles.contains(rid))
-                    {
-                        return true;
-                    }
-                }
-            }
+        if !message.mention_roles.is_empty()
+            && !self.suppress_roles_enabled(channel.guild_id.as_deref())
+            && let Some(gid) = channel.guild_id.as_deref()
+            && let Some(roles) = self
+                .guild_members
+                .get(gid)
+                .and_then(|mems| mems.iter().find(|m| m.user.id == self.me.id))
+                .map(|member| member.roles.as_slice())
+            && message.mention_roles.iter().any(|role_id| roles.contains(role_id))
+        {
+            return true;
         }
-        if message.mention_everyone {
-            match self.channel_by_id(&message.channel_id) {
-                None => return true,
-                Some(ch) if ch.guild_id.is_none() => return true,
-                Some(ch) => {
-                    let perms = self.channel_permissions(ch);
-                    return perms & crate::permissions::MENTION_EVERYONE != 0;
-                }
-            }
+        if message.mention_everyone
+            && !self.suppress_everyone_enabled(channel.guild_id.as_deref())
+        {
+            return true;
+        }
+        if channel.guild_id.is_none() && !self.channel_is_muted_effective(&channel) {
+            return true;
         }
         false
     }
@@ -914,6 +1385,14 @@ impl App {
         messages
     }
 
+    pub fn active_oldest_message_id(&self) -> Option<String> {
+        let channel_id = self.selected_channel_id.as_deref()?;
+        self.messages
+            .get(channel_id)
+            .and_then(|messages| messages.first())
+            .map(|message| message.id.clone())
+    }
+
     pub fn scroll_messages_up(&mut self, amount: u16) {
         self.message_scroll_from_bottom = self.message_scroll_from_bottom.saturating_add(amount);
     }
@@ -924,6 +1403,32 @@ impl App {
 
     pub fn set_status(&mut self, message: impl Into<String>) {
         self.status_message = message.into();
+        self.status_message_until = None;
+    }
+
+    pub fn set_transient_status(&mut self, message: impl Into<String>, duration: Duration) {
+        self.status_message = message.into();
+        self.status_message_until = Some(Instant::now() + duration);
+    }
+
+    pub fn clear_status(&mut self) {
+        self.status_message.clear();
+        self.status_message_until = None;
+    }
+
+    pub fn expire_status_if_needed(&mut self) {
+        if self
+            .status_message_until
+            .is_some_and(|until| Instant::now() >= until)
+        {
+            self.clear_status();
+        }
+    }
+
+    pub fn should_auto_load_history_on_scroll_up(&self) -> bool {
+        self.message_scroll_max
+            .saturating_sub(self.message_scroll_from_bottom.min(self.message_scroll_max))
+            <= Self::HISTORY_AUTOLOAD_THRESHOLD_ROWS
     }
 
     pub fn open_help(&mut self) {
@@ -1045,6 +1550,9 @@ impl App {
     }
 
     pub fn others_typing_phrase(&self) -> Option<String> {
+        if !self.ui_settings.show_typing_indicators {
+            return None;
+        }
         let ch = self.active_channel_id()?;
         let names = self.typing_peer_names(&ch);
         if names.is_empty() {
@@ -1054,6 +1562,9 @@ impl App {
     }
 
     pub fn others_typing_anim_active(&self) -> bool {
+        if !self.ui_settings.show_typing_indicators {
+            return false;
+        }
         self.active_channel_id()
             .is_some_and(|c| !self.typing_peer_names(&c).is_empty())
     }
@@ -1259,10 +1770,14 @@ impl App {
             merge_user_cache(&mut self.user_cache, [message.author.clone()]);
         }
         messages.sort_by_key(|message| snowflake_sort_key(&message.id));
+        const MAX_MESSAGES: usize = 500;
         if messages.len() < 50 {
             self.messages_older_exhausted.insert(channel_id.to_string());
         } else {
             self.messages_older_exhausted.remove(channel_id);
+        }
+        if messages.len() > MAX_MESSAGES {
+            messages.drain(0..messages.len() - MAX_MESSAGES);
         }
         self.messages.insert(channel_id.to_string(), messages);
         self.loading_messages.remove(channel_id);
@@ -1486,11 +2001,7 @@ impl App {
     }
 
     pub fn ack_channel(&mut self, channel_id: &str) {
-        let last_msg = self
-            .messages
-            .get(channel_id)
-            .and_then(|msgs| msgs.last())
-            .map(|m| m.id.clone());
+        let last_msg = self.channel_last_message_id(channel_id);
         if let Some(msg_id) = last_msg {
             self.read_states.insert(
                 channel_id.to_string(),
@@ -1521,23 +2032,53 @@ impl App {
             .unwrap_or(0)
     }
 
-    fn channel_last_message_id(&self, channel_id: &str) -> Option<String> {
-        // check from cached messages first -> try from channel metadata
-        if let Some(msgs) = self.messages.get(channel_id)
-            && let Some(last) = msgs.last()
-        {
-            return Some(last.id.clone());
-        }
-        // falls back (ah myback!)
-        let all_channels: Vec<&ChannelResponse> = self
+    fn channel_counts_toward_server_unread(&self, channel: &ChannelResponse) -> bool {
+        channel.channel_type() != CHANNEL_GUILD_CATEGORY
+            && (channel.channel_type() != CHANNEL_GUILD_VOICE
+                || self.visible_channel_mention_count(&channel.id) > 0)
+    }
+
+    pub fn server_unread_channel_count(&self, server: &ServerSelection) -> usize {
+        self.all_channels_for_server(server)
+            .into_iter()
+            .filter(|channel| self.channel_counts_toward_server_unread(channel))
+            .filter(|channel| self.visible_channel_is_unread(&channel.id))
+            .count()
+    }
+
+    pub fn server_mention_count(&self, server: &ServerSelection) -> u64 {
+        self.all_channels_for_server(server)
+            .into_iter()
+            .filter(|channel| channel.channel_type() != CHANNEL_GUILD_CATEGORY)
+            .map(|channel| self.visible_channel_mention_count(&channel.id))
+            .sum()
+    }
+
+    pub(crate) fn channel_last_message_id(&self, channel_id: &str) -> Option<String> {
+        let cached_last = self
+            .messages
+            .get(channel_id)
+            .and_then(|msgs| msgs.last())
+            .map(|msg| msg.id.clone());
+        let channel_last = self
             .private_channels
             .iter()
             .chain(self.guild_channels.values().flat_map(|v| v.iter()))
-            .collect();
-        all_channels
-            .iter()
             .find(|c| c.id == channel_id)
-            .and_then(|c| c.last_message_id.clone())
+            .and_then(|c| c.last_message_id.clone());
+
+        match (cached_last, channel_last) {
+            (Some(cached), Some(channel)) => {
+                if snowflake_sort_key(&cached) >= snowflake_sort_key(&channel) {
+                    Some(cached)
+                } else {
+                    Some(channel)
+                }
+            }
+            (Some(cached), None) => Some(cached),
+            (None, Some(channel)) => Some(channel),
+            (None, None) => None,
+        }
     }
 
     // ms
@@ -1755,7 +2296,7 @@ impl App {
         }
         self.update_mention_filter();
         if self.mention_autocomplete.is_some() {
-            self.set_status("");
+            self.clear_status();
         }
     }
 
@@ -2285,5 +2826,281 @@ fn fluxer_typing_phrase(names: &[String]) -> String {
         n if (10..=14).contains(&n) => SYMPHONY.to_string(),
         n if (15..=19).contains(&n) => FIESTA.to_string(),
         _ => APOCALYPSE.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_app(private_channels: Vec<ChannelResponse>) -> App {
+        let mut me = UserPrivateResponse::default();
+        me.id = "me".to_string();
+
+        App::new(
+            WellKnownFluxerResponse::default(),
+            me,
+            None,
+            Vec::new(),
+            private_channels,
+            ServerSelection::DirectMessages,
+            None,
+            UiSettings::default(),
+        )
+    }
+
+    fn guild_app(channels: Vec<ChannelResponse>) -> App {
+        let mut app = test_app(Vec::new());
+        app.guilds.push(GuildResponse {
+            id: "guild-1".to_string(),
+            name: "Guild".to_string(),
+            ..GuildResponse::default()
+        });
+        app.guild_channels.insert("guild-1".to_string(), channels);
+        app.selected_server = ServerSelection::Guild("guild-1".to_string());
+        app
+    }
+
+    #[test]
+    fn channel_last_message_id_prefers_newer_channel_metadata() {
+        let channel = ChannelResponse {
+            id: "dm-1".to_string(),
+            kind: CHANNEL_DM,
+            last_message_id: Some("300".to_string()),
+            ..ChannelResponse::default()
+        };
+        let mut app = test_app(vec![channel]);
+        app.messages.insert(
+            "dm-1".to_string(),
+            vec![
+                MessageResponse {
+                    id: "100".to_string(),
+                    channel_id: "dm-1".to_string(),
+                    ..MessageResponse::default()
+                },
+                MessageResponse {
+                    id: "250".to_string(),
+                    channel_id: "dm-1".to_string(),
+                    ..MessageResponse::default()
+                },
+            ],
+        );
+
+        assert_eq!(app.channel_last_message_id("dm-1").as_deref(), Some("300"));
+    }
+
+    #[test]
+    fn ack_channel_uses_channel_metadata_without_cached_messages() {
+        let channel = ChannelResponse {
+            id: "dm-1".to_string(),
+            kind: CHANNEL_DM,
+            last_message_id: Some("400".to_string()),
+            ..ChannelResponse::default()
+        };
+        let mut app = test_app(vec![channel]);
+
+        app.ack_channel("dm-1");
+
+        assert_eq!(
+            app.read_states
+                .get("dm-1")
+                .and_then(|state| state.last_message_id.as_deref()),
+            Some("400")
+        );
+        assert_eq!(app.channel_mention_count("dm-1"), 0);
+    }
+
+    #[test]
+    fn auto_load_history_only_near_top_when_enabled() {
+        let mut app = test_app(Vec::new());
+        app.message_scroll_max = 24;
+
+        app.message_scroll_from_bottom = 20;
+        assert!(!app.should_auto_load_history_on_scroll_up());
+
+        app.message_scroll_from_bottom = 21;
+        assert!(app.should_auto_load_history_on_scroll_up());
+    }
+
+    #[test]
+    fn auto_load_history_uses_scroll_threshold() {
+        let mut app = test_app(Vec::new());
+        app.message_scroll_max = 24;
+        app.message_scroll_from_bottom = 18;
+
+        assert!(!app.should_auto_load_history_on_scroll_up());
+    }
+
+    #[test]
+    fn server_aggregates_unread_channels_and_mentions() {
+        let mut app = test_app(Vec::new());
+        app.guilds.push(GuildResponse {
+            id: "guild-1".to_string(),
+            name: "Guild".to_string(),
+            ..GuildResponse::default()
+        });
+        app.guild_channels.insert(
+            "guild-1".to_string(),
+            vec![
+                ChannelResponse {
+                    id: "chan-1".to_string(),
+                    guild_id: Some("guild-1".to_string()),
+                    name: "alpha".to_string(),
+                    kind: CHANNEL_GUILD_TEXT,
+                    last_message_id: Some("200".to_string()),
+                    ..ChannelResponse::default()
+                },
+                ChannelResponse {
+                    id: "chan-2".to_string(),
+                    guild_id: Some("guild-1".to_string()),
+                    name: "beta".to_string(),
+                    kind: CHANNEL_GUILD_TEXT,
+                    last_message_id: Some("300".to_string()),
+                    ..ChannelResponse::default()
+                },
+            ],
+        );
+        app.read_states.insert(
+            "chan-1".to_string(),
+            ReadState {
+                last_message_id: Some("150".to_string()),
+                mention_count: 0,
+            },
+        );
+        app.read_states.insert(
+            "chan-2".to_string(),
+            ReadState {
+                last_message_id: Some("300".to_string()),
+                mention_count: 2,
+            },
+        );
+
+        let server = ServerSelection::Guild("guild-1".to_string());
+        assert_eq!(app.server_unread_channel_count(&server), 1);
+        assert_eq!(app.server_mention_count(&server), 2);
+    }
+
+    #[test]
+    fn muted_server_hides_unread_only_activity() {
+        let mut app = guild_app(vec![
+            ChannelResponse {
+                id: "chan-1".to_string(),
+                guild_id: Some("guild-1".to_string()),
+                name: "alpha".to_string(),
+                kind: CHANNEL_GUILD_TEXT,
+                position: 1,
+                last_message_id: Some("200".to_string()),
+                ..ChannelResponse::default()
+            },
+            ChannelResponse {
+                id: "chan-2".to_string(),
+                guild_id: Some("guild-1".to_string()),
+                name: "beta".to_string(),
+                kind: CHANNEL_GUILD_TEXT,
+                position: 2,
+                last_message_id: Some("300".to_string()),
+                ..ChannelResponse::default()
+            },
+        ]);
+        app.read_states.insert(
+            "chan-1".to_string(),
+            ReadState {
+                last_message_id: Some("150".to_string()),
+                mention_count: 0,
+            },
+        );
+        app.read_states.insert(
+            "chan-2".to_string(),
+            ReadState {
+                last_message_id: Some("300".to_string()),
+                mention_count: 2,
+            },
+        );
+        app.upsert_user_guild_settings(UserGuildSettingsResponse {
+            guild_id: Some("guild-1".to_string()),
+            muted: true,
+            ..UserGuildSettingsResponse::default()
+        });
+
+        let server = ServerSelection::Guild("guild-1".to_string());
+        assert_eq!(app.server_unread_channel_count(&server), 0);
+        assert_eq!(app.server_mention_count(&server), 2);
+    }
+
+    #[test]
+    fn hide_muted_channels_filters_sidebar_entries() {
+        let mut app = guild_app(vec![
+            ChannelResponse {
+                id: "chan-1".to_string(),
+                guild_id: Some("guild-1".to_string()),
+                name: "alpha".to_string(),
+                kind: CHANNEL_GUILD_TEXT,
+                position: 1,
+                ..ChannelResponse::default()
+            },
+            ChannelResponse {
+                id: "chan-2".to_string(),
+                guild_id: Some("guild-1".to_string()),
+                name: "beta".to_string(),
+                kind: CHANNEL_GUILD_TEXT,
+                position: 2,
+                ..ChannelResponse::default()
+            },
+        ]);
+        app.selected_channel_id = Some("chan-2".to_string());
+        app.upsert_user_guild_settings(UserGuildSettingsResponse {
+            guild_id: Some("guild-1".to_string()),
+            hide_muted_channels: true,
+            channel_overrides: HashMap::from([(
+                "chan-1".to_string(),
+                UserGuildChannelOverride {
+                    muted: true,
+                    ..UserGuildChannelOverride::default()
+                },
+            )]),
+            ..UserGuildSettingsResponse::default()
+        });
+
+        let visible = app.channels_for_server(&ServerSelection::Guild("guild-1".to_string()));
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].id, "chan-2");
+    }
+
+    #[test]
+    fn suppress_everyone_blocks_local_mention_increment() {
+        let mut app = guild_app(vec![ChannelResponse {
+            id: "chan-1".to_string(),
+            guild_id: Some("guild-1".to_string()),
+            name: "alpha".to_string(),
+            kind: CHANNEL_GUILD_TEXT,
+            position: 1,
+            last_message_id: Some("200".to_string()),
+            ..ChannelResponse::default()
+        }]);
+        app.upsert_user_guild_settings(UserGuildSettingsResponse {
+            guild_id: Some("guild-1".to_string()),
+            suppress_everyone: true,
+            ..UserGuildSettingsResponse::default()
+        });
+        app.read_states.insert(
+            "chan-1".to_string(),
+            ReadState {
+                last_message_id: Some("150".to_string()),
+                mention_count: 0,
+            },
+        );
+
+        app.on_gateway_message_create(&MessageResponse {
+            id: "250".to_string(),
+            channel_id: "chan-1".to_string(),
+            mention_everyone: true,
+            author: UserPartialResponse {
+                id: "other".to_string(),
+                ..UserPartialResponse::default()
+            },
+            ..MessageResponse::default()
+        });
+
+        assert_eq!(app.channel_mention_count("chan-1"), 0);
     }
 }

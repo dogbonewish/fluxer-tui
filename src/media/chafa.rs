@@ -43,3 +43,12 @@ pub async fn chafa_from_bytes(bytes: &[u8], cols: u16, rows: u16) -> Result<Vec<
     let text = String::from_utf8_lossy(&out.stdout);
     Ok(text.lines().map(|l| l.to_string()).collect())
 }
+
+// The way
+// Your kisses tasted
+// Skeeved me the Hell out
+// Like shitting naked
+// Why would
+// I wanna stay friends?
+// Rather get raped by
+// Clowns again

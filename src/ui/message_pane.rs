@@ -59,7 +59,8 @@ fn embed_display_label(embed: &MessageEmbedResponse) -> (String, bool) {
     (label, is_gif)
 }
 
-pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
+    app.message_scroll_max = 0;
     if app.active_channel_is_voice() {
         render_voice(frame, area, app);
     } else if app.active_channel_is_link() {
@@ -760,7 +761,7 @@ pub fn scroll_for_selected_message(
     Some(new_scroll.min(max_scroll) as u16)
 }
 
-fn render_messages(frame: &mut Frame, area: Rect, app: &App) {
+fn render_messages(frame: &mut Frame, area: Rect, app: &mut App) {
     let block = block("Messages", app.focus == Focus::Messages);
     let inner = block.inner(area);
     let text_w = inner.width.max(1);
@@ -813,6 +814,7 @@ fn render_messages(frame: &mut Frame, area: Rect, app: &App) {
     let total_display_rows: u16 = heights.iter().sum();
 
     let max_scroll = total_display_rows.saturating_sub(pane_visible);
+    app.message_scroll_max = max_scroll;
     let scroll_from_bottom = app.message_scroll_from_bottom.min(max_scroll);
     let top = total_display_rows.saturating_sub(pane_visible.saturating_add(scroll_from_bottom));
 

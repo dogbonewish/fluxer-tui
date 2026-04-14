@@ -213,6 +213,7 @@ async fn main() -> Result<()> {
             _ = tick.tick() => {
                 app.advance_image_preview_animation(Duration::from_millis(100));
                 app.prune_stale_typing();
+                app.expire_status_if_needed();
                 if app.others_typing_anim_active() {
                     app.input_bar_anim_slow = app.input_bar_anim_slow.saturating_add(1);
                     if app.input_bar_anim_slow >= 2 {
@@ -439,6 +440,7 @@ fn handle_key_event(
         app.show_settings = !app.show_settings;
         if app.show_settings {
             app.settings_cursor = 0;
+            app.show_server_notifications = false;
             app.dismiss_image_preview();
         }
         return;
@@ -456,6 +458,56 @@ fn handle_key_event(
             KeyCode::Char(' ') | KeyCode::Right | KeyCode::Left => {
                 app.toggle_settings_selection();
                 persist_ui_settings(config_path, config, app);
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    if app.show_server_notifications {
+        match key.code {
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
+                app.show_server_notifications = false;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.server_notification_cursor =
+                    app.server_notification_cursor.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                app.server_notification_cursor = (app.server_notification_cursor + 1)
+                    .min(App::SERVER_NOTIFICATION_LAST_ROW);
+            }
+            KeyCode::PageUp => {
+                app.server_notification_scroll = app.server_notification_scroll.saturating_sub(1);
+            }
+            KeyCode::PageDown => {
+                app.server_notification_scroll = app.server_notification_scroll.saturating_add(1);
+            }
+            KeyCode::Home => {
+                app.server_notification_scroll = 0;
+            }
+            KeyCode::End => {
+                app.server_notification_scroll = u16::MAX;
+            }
+            KeyCode::Left => {
+                if let Some((guild_id, patch)) = app.cycle_server_notification_setting(-1) {
+                    spawn_user_guild_settings_update(
+                        client.clone(),
+                        event_tx.clone(),
+                        guild_id,
+                        patch,
+                    );
+                }
+            }
+            KeyCode::Right | KeyCode::Char(' ') => {
+                if let Some((guild_id, patch)) = app.cycle_server_notification_setting(1) {
+                    spawn_user_guild_settings_update(
+                        client.clone(),
+                        event_tx.clone(),
+                        guild_id,
+                        patch,
+                    );
+                }
             }
             _ => {}
         }
@@ -498,8 +550,9 @@ fn handle_key_event(
             KeyCode::Up => app.channel_picker_prev(),
             KeyCode::Down => app.channel_picker_next(),
             KeyCode::Enter => {
+                let old_channel_id = app.selected_channel_id.clone();
                 if app.channel_picker_confirm() {
-                    ack_current_channel(app, client, event_tx);
+                    ack_channel_if_unread(app, client, old_channel_id.as_deref());
                 }
             }
             KeyCode::Backspace if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -542,7 +595,7 @@ fn handle_key_event(
                 let old = app.selected_channel_id.clone();
                 app.move_channel_wrapping(1);
                 if old != app.selected_channel_id {
-                    ack_current_channel(app, client, event_tx);
+                    ack_channel_if_unread(app, client, old.as_deref());
                 }
                 return;
             }
@@ -550,7 +603,7 @@ fn handle_key_event(
                 let old = app.selected_channel_id.clone();
                 app.move_channel_wrapping(-1);
                 if old != app.selected_channel_id {
-                    ack_current_channel(app, client, event_tx);
+                    ack_channel_if_unread(app, client, old.as_deref());
                 }
                 return;
             }
@@ -621,7 +674,7 @@ fn handle_key_event(
             app.message_scroll_from_bottom = 0;
             app.selected_message_index = None;
             if old_ch != app.selected_channel_id {
-                ack_current_channel(app, client, event_tx);
+                ack_channel_if_unread(app, client, old_ch.as_deref());
             }
             app.set_status("Jumped to channel with activity.");
         } else {
@@ -919,6 +972,13 @@ fn handle_key_event(
                 app.focus = Focus::Input;
             }
         }
+        KeyCode::Char('n')
+            if !key.modifiers.contains(KeyModifiers::CONTROL)
+                && matches!(app.focus, Focus::Servers | Focus::Channels) =>
+        {
+            app.show_settings = false;
+            app.open_server_notification_settings();
+        }
         KeyCode::Enter => {
             if app.active_channel_is_link() {
                 if let Some(channel) = app.active_channel()
@@ -936,13 +996,17 @@ fn handle_key_event(
         }
         KeyCode::Up | KeyCode::Char('k') => match app.focus {
             Focus::Servers => {
+                let old_ch = app.selected_channel_id.clone();
                 app.move_server(-1);
+                if old_ch != app.selected_channel_id {
+                    ack_channel_if_unread(app, client, old_ch.as_deref());
+                }
             }
             Focus::Channels => {
                 let old_ch = app.selected_channel_id.clone();
                 app.move_channel(-1);
                 if old_ch != app.selected_channel_id {
-                    ack_current_channel(app, client, event_tx);
+                    ack_channel_if_unread(app, client, old_ch.as_deref());
                 }
             }
             Focus::Messages => {
@@ -950,19 +1014,24 @@ fn handle_key_event(
                     app.move_selected_message(-1);
                 } else {
                     app.scroll_messages_up(3);
+                    maybe_auto_load_older_messages(app, client, event_tx);
                 }
             }
             Focus::Input => {}
         },
         KeyCode::Down | KeyCode::Char('j') => match app.focus {
             Focus::Servers => {
+                let old_ch = app.selected_channel_id.clone();
                 app.move_server(1);
+                if old_ch != app.selected_channel_id {
+                    ack_channel_if_unread(app, client, old_ch.as_deref());
+                }
             }
             Focus::Channels => {
                 let old_ch = app.selected_channel_id.clone();
                 app.move_channel(1);
                 if old_ch != app.selected_channel_id {
-                    ack_current_channel(app, client, event_tx);
+                    ack_channel_if_unread(app, client, old_ch.as_deref());
                 }
             }
             Focus::Messages => {
@@ -974,7 +1043,12 @@ fn handle_key_event(
             }
             Focus::Input => {}
         },
-        KeyCode::PageUp => app.scroll_messages_up(18),
+        KeyCode::PageUp => {
+            app.scroll_messages_up(18);
+            if app.selected_message_index.is_none() {
+                maybe_auto_load_older_messages(app, client, event_tx);
+            }
+        }
         KeyCode::PageDown => app.scroll_messages_down(18),
         // s = select mode
         KeyCode::Char('s') if app.focus == Focus::Messages => {
@@ -1051,16 +1125,19 @@ fn schedule_needed_fetches(
     client: FluxerHttpClient,
     event_tx: UnboundedSender<AppEvent>,
 ) {
-    let guild_id = app
-        .guild_id_for_active_channel()
-        .or_else(|| app.active_guild_id());
-    if let Some(guild_id) = guild_id {
+    for guild_id in app.guilds.iter().map(|guild| guild.id.clone()) {
         if !app.guild_channels.contains_key(&guild_id)
             && app.api_backoff_can_try(&format!("channels:{guild_id}"))
             && app.loading_channels.insert(guild_id.clone())
         {
-            spawn_guild_channels_load(client.clone(), event_tx.clone(), guild_id.clone());
+            spawn_guild_channels_load(client.clone(), event_tx.clone(), guild_id);
         }
+    }
+
+    let active_guild_id = app
+        .guild_id_for_active_channel()
+        .or_else(|| app.active_guild_id());
+    if let Some(guild_id) = active_guild_id {
         if !app.guild_emojis.contains_key(&guild_id)
             && app.api_backoff_can_try(&format!("emojis:{guild_id}"))
             && app.loading_emojis.insert(guild_id.clone())
@@ -1240,7 +1317,6 @@ fn try_load_older_messages(
         return;
     }
     if app.messages_older_exhausted.contains(&channel_id) {
-        app.set_status("No more message history here.");
         return;
     }
     if app.loading_older_messages.contains(&channel_id)
@@ -1248,12 +1324,21 @@ fn try_load_older_messages(
     {
         return;
     }
-    let Some(oldest_id) = app.active_messages().first().map(|m| m.id.clone()) else {
+    let Some(oldest_id) = app.active_oldest_message_id() else {
         return;
     };
     if app.loading_older_messages.insert(channel_id.clone()) {
-        app.set_status("Loading older messages…");
         spawn_message_load_older(client.clone(), event_tx.clone(), channel_id, oldest_id);
+    }
+}
+
+fn maybe_auto_load_older_messages(
+    app: &mut App,
+    client: &FluxerHttpClient,
+    event_tx: &UnboundedSender<AppEvent>,
+) {
+    if app.should_auto_load_history_on_scroll_up() {
+        try_load_older_messages(app, client, event_tx);
     }
 }
 
@@ -1510,25 +1595,41 @@ fn spawn_nick_change(
     });
 }
 
-fn ack_current_channel(
-    app: &mut App,
-    client: &FluxerHttpClient,
-    _event_tx: &UnboundedSender<AppEvent>,
+fn spawn_user_guild_settings_update(
+    client: FluxerHttpClient,
+    event_tx: UnboundedSender<AppEvent>,
+    guild_id: String,
+    patch: crate::api::types::UserGuildSettingsPatch,
 ) {
-    if let Some(channel_id) = app.active_channel_id()
-        && app.channel_is_unread(&channel_id)
-    {
-        if let Some(msgs) = app.messages.get(&channel_id)
-            && let Some(last) = msgs.last()
+    tokio::spawn(async move {
+        match client
+            .update_user_guild_settings(Some(guild_id.as_str()), &patch)
+            .await
         {
-            let msg_id = last.id.clone();
-            let ch_id = channel_id.clone();
+            Ok(settings) => {
+                let _ = event_tx.send(AppEvent::UserGuildSettingsUpdated { settings });
+            }
+            Err(err) => {
+                let _ = event_tx.send(AppEvent::SetStatus(format!(
+                    "Failed to update notification settings: {err}"
+                )));
+            }
+        }
+    });
+}
+
+fn ack_channel_if_unread(app: &mut App, client: &FluxerHttpClient, channel_id: Option<&str>) {
+    if let Some(channel_id) = channel_id
+        && (app.channel_is_unread(channel_id) || app.channel_mention_count(channel_id) > 0)
+    {
+        if let Some(msg_id) = app.channel_last_message_id(channel_id) {
+            let ch_id = channel_id.to_string();
             let c = client.clone();
             tokio::spawn(async move {
                 let _ = c.ack_message(&ch_id, &msg_id).await;
             });
         }
-        app.ack_channel(&channel_id);
+        app.ack_channel(channel_id);
     }
 }
 

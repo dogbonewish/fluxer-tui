@@ -7,7 +7,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 const HELP: &str = r#"Global (almost any screen)
   F1 - keybindings (this overlay)
-  F2 - settings (timestamps; saved to config)
+  F2 - settings (UI preferences; saved to config)
   Ctrl+H - keybindings when focus is not the message input
   Ctrl+C - quit          Ctrl+L - log out and quit
   q - quit (when not typing in input)
@@ -22,16 +22,18 @@ Focus & navigation
 
 Servers (left column)
   Up / Down / j / k - move server selection
+  n - notification settings for the selected community
   l / Right - open channel list for selected server
 
 Channels (middle column)
   Up / Down / j / k - move channel
+  n - notification settings for the selected community
   Enter - open message view for channel
 
 Messages
   Up / Down / j / k - scroll list, or move selection when a message is selected
   PgUp / PgDn - scroll message pane
-  [ - load older messages (history)
+  Scroll up near the top - older messages load automatically
   s - select last message (selection mode)
   r - reply to selected message
   f - forward selected (pick channel with Ctrl+K, optional note, Enter)

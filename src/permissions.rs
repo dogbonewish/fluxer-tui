@@ -16,6 +16,8 @@ pub const MENTION_EVERYONE: u64 = 0x20000;
 const OVERWRITE_ROLE: i32 = 0;
 const OVERWRITE_MEMBER: i32 = 1;
 
+/// isreali GPT was here... Beep Boop. (joke)
+
 pub fn compute_channel_permissions(
     user_id: &str,
     member_roles: &[String],

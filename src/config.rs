@@ -11,6 +11,12 @@ pub struct UiSettings {
     pub clock_12h: bool,
     #[serde(default, skip_serializing, rename = "image_display")]
     legacy_image_display: Option<String>,
+    #[serde(default = "default_true")]
+    pub show_typing_indicators: bool,
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 impl Default for UiSettings {
@@ -18,6 +24,7 @@ impl Default for UiSettings {
         Self {
             clock_12h: false,
             legacy_image_display: None,
+            show_typing_indicators: true,
         }
     }
 }

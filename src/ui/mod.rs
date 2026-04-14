@@ -9,6 +9,7 @@ pub(crate) mod input_word_wrap;
 pub mod mention_popup;
 pub mod message_markdown;
 pub mod message_pane;
+pub mod server_notifications_overlay;
 pub mod settings_overlay;
 pub mod sidebar;
 pub mod status_bar;
@@ -90,6 +91,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         help_overlay::render(frame, area, app);
     } else if app.show_settings {
         settings_overlay::render(frame, area, app);
+    } else if app.show_server_notifications {
+        server_notifications_overlay::render(frame, area, app);
     } else if app.image_preview.is_some() {
         image_preview::render(frame, area, app);
     } else if app.channel_picker.is_some() {

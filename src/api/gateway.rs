@@ -10,8 +10,8 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::time::{Duration, MissedTickBehavior, interval, sleep};
-use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const OP_DISPATCH: u8 = 0;
 const OP_HEARTBEAT: u8 = 1;
@@ -26,14 +26,17 @@ const OP_LAZY_REQUEST: u8 = 14;
 #[derive(Debug, Clone)]
 pub enum GatewayCommand {
     /// User-account sessions: subscribe so MESSAGE_CREATE, TYPING_START, etc. are delivered (see fluxer session_passive).
-    LazySubscribeGuild { guild_id: String },
+    LazySubscribeGuild {
+        guild_id: String,
+    },
     Shutdown,
 }
 
 // close codes the server sends that mean "stop trying"
 // - dogbone
 fn is_fatal_close_code(code: u16) -> bool {
-    matches!(code,
+    matches!(
+        code,
         4004 // AUTHENTICATION_FAILED
         | 4010 // INVALID_SHARD
         | 4011 // SHARDING_REQUIRED
@@ -282,7 +285,11 @@ async fn wait_for_hello(
         // if server closes before HELLO, surface the actual reason
         if let Message::Close(frame) = &message {
             let close = extract_close(frame);
-            return Err(anyhow!("server closed before HELLO: {} (code {})", close.reason, close.code));
+            return Err(anyhow!(
+                "server closed before HELLO: {} (code {})",
+                close.reason,
+                close.code
+            ));
         }
 
         let Some(text) = websocket_text(&message)? else {

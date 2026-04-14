@@ -150,6 +150,10 @@ pub const CHANNEL_GROUP_DM: i32 = 3;
 pub const CHANNEL_GUILD_CATEGORY: i32 = 4;
 pub const CHANNEL_GUILD_LINK: i32 = 998;
 pub const CHANNEL_DM_PERSONAL_NOTES: i32 = 999;
+pub const MESSAGE_NOTIFICATIONS_ALL_MESSAGES: i32 = 0;
+pub const MESSAGE_NOTIFICATIONS_ONLY_MENTIONS: i32 = 1;
+pub const MESSAGE_NOTIFICATIONS_NO_MESSAGES: i32 = 2;
+pub const MESSAGE_NOTIFICATIONS_INHERIT: i32 = 3;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WellKnownFluxerResponse {
@@ -261,6 +265,8 @@ pub struct GuildResponse {
     pub owner_id: String,
     #[serde(default)]
     pub permissions: Option<String>,
+    #[serde(default)]
+    pub default_message_notifications: i32,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -436,6 +442,68 @@ pub struct ReadStateResponse {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UserGuildMuteConfig {
+    #[serde(default)]
+    pub end_time: Option<String>,
+    #[serde(default)]
+    pub selected_time_window: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UserGuildChannelOverride {
+    #[serde(default)]
+    pub collapsed: bool,
+    #[serde(default)]
+    pub message_notifications: i32,
+    #[serde(default)]
+    pub muted: bool,
+    #[serde(default)]
+    pub mute_config: Option<UserGuildMuteConfig>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UserGuildSettingsResponse {
+    #[serde(default)]
+    pub guild_id: Option<String>,
+    #[serde(default)]
+    pub message_notifications: i32,
+    #[serde(default)]
+    pub muted: bool,
+    #[serde(default)]
+    pub mute_config: Option<UserGuildMuteConfig>,
+    #[serde(default)]
+    pub mobile_push: bool,
+    #[serde(default)]
+    pub suppress_everyone: bool,
+    #[serde(default)]
+    pub suppress_roles: bool,
+    #[serde(default)]
+    pub hide_muted_channels: bool,
+    #[serde(default)]
+    pub channel_overrides: HashMap<String, UserGuildChannelOverride>,
+    #[serde(default)]
+    pub version: i32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UserGuildSettingsPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_notifications: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub muted: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mute_config: Option<Option<UserGuildMuteConfig>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mobile_push: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suppress_everyone: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suppress_roles: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hide_muted_channels: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MessageResponse {
     #[serde(default)]
     pub id: String,
@@ -556,6 +624,8 @@ pub struct ReadyEvent {
     #[serde(default)]
     pub user_settings: Option<UserSettingsResponse>,
     #[serde(default)]
+    pub user_guild_settings: Vec<UserGuildSettingsResponse>,
+    #[serde(default, alias = "read_state", rename = "read_states")]
     pub read_state: Vec<ReadStateResponse>,
 }
 
@@ -790,5 +860,30 @@ pub fn merge_user_cache(
         if !user.id.is_empty() {
             cache.insert(user.id.clone(), user);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ready_event_accepts_read_states_payload() {
+        let ready: ReadyEvent = serde_json::from_value(serde_json::json!({
+            "session_id": "sess",
+            "read_states": [
+                {
+                    "id": "chan-1",
+                    "last_message_id": "42",
+                    "mention_count": 3
+                }
+            ]
+        }))
+        .expect("READY payload should deserialize");
+
+        assert_eq!(ready.read_state.len(), 1);
+        assert_eq!(ready.read_state[0].id, "chan-1");
+        assert_eq!(ready.read_state[0].last_message_id.as_deref(), Some("42"));
+        assert_eq!(ready.read_state[0].mention_count, 3);
     }
 }

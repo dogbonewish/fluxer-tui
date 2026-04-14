@@ -28,9 +28,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     let item_len = items.len();
-    let sel = emoji_state
-        .selected_index
-        .min(item_len.saturating_sub(1));
+    let sel = emoji_state.selected_index.min(item_len.saturating_sub(1));
 
     let item_count = item_len.min(12) as u16;
     let popup_width = 40.min(area.width);

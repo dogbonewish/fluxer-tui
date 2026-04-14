@@ -2,7 +2,8 @@ use crate::api::types::{
     AuthSessionChangeEvent, CallDeleteEvent, CallEvent, ChannelBulkUpdateEvent, ChannelResponse,
     GuildCreateEvent, GuildDeleteEvent, GuildMemberResponse, GuildResponse, MessageAckEvent,
     MessageDeleteEvent, MessageReactionAddEvent, MessageReactionRemoveEvent, MessageResponse,
-    ReadyEvent, TypingStartEvent, UserPrivateResponse, UserSettingsResponse, VoiceStateResponse,
+    ReadyEvent, TypingStartEvent, UserGuildSettingsResponse, UserPrivateResponse,
+    UserSettingsResponse, VoiceStateResponse,
 };
 use crate::app::{App, GatewayStatus, ImagePreviewState, ServerSelection};
 use image::DynamicImage;
@@ -106,6 +107,9 @@ pub enum AppEvent {
     ImagePreviewFailed {
         message: String,
     },
+    UserGuildSettingsUpdated {
+        settings: UserGuildSettingsResponse,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -139,6 +143,7 @@ pub fn apply_event(
                     if !ready.private_channels.is_empty() {
                         app.set_private_channels(ready.private_channels);
                     }
+                    app.set_user_guild_settings(ready.user_guild_settings);
                     for guild in ready.guilds {
                         if guild.unavailable {
                             continue;
@@ -177,6 +182,12 @@ pub fn apply_event(
             "USER_SETTINGS_UPDATE" => {
                 if let Ok(settings) = serde_json::from_value::<UserSettingsResponse>(payload) {
                     app.user_settings = Some(settings);
+                }
+            }
+            "USER_GUILD_SETTINGS_UPDATE" => {
+                if let Ok(settings) = serde_json::from_value::<UserGuildSettingsResponse>(payload)
+                {
+                    app.upsert_user_guild_settings(settings);
                 }
             }
             "AUTH_SESSION_CHANGE" => {
@@ -449,9 +460,10 @@ pub fn apply_event(
             let bump = (n as u16).saturating_mul(2).min(160);
             app.message_scroll_from_bottom = app.message_scroll_from_bottom.saturating_add(bump);
             if n == 0 {
-                app.set_status("No older messages.");
-            } else {
-                app.set_status(format!("Loaded {n} older message(s)."));
+                app.set_transient_status(
+                    "Reached the beginning of message history.",
+                    App::TRANSIENT_STATUS_DURATION,
+                );
             }
         }
         AppEvent::MessagesOlderFailed {
@@ -616,6 +628,9 @@ pub fn apply_event(
             if matches!(app.image_preview, Some(ImagePreviewState::Loading { .. })) {
                 app.image_preview = Some(ImagePreviewState::Failed { message });
             }
+        }
+        AppEvent::UserGuildSettingsUpdated { settings } => {
+            app.upsert_user_guild_settings(settings);
         }
     }
 

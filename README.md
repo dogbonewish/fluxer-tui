@@ -1,6 +1,6 @@
 # Fluxer TUI
 
-Terminal UI for [Fluxer](https://fluxer.app), built with Ratatui.
+TUI for [Fluxer](https://fluxer.app), built with Ratatui.
 
 ## Requirements
 
@@ -170,9 +170,7 @@ Plain letters (without **Ctrl**) are inserted into the message, except where aut
 
 - **Markdown** parser is still hand-crafted with duct-tape and incomplete.
 - **Voice** is view-only; no join/transmit/hear.
-- "Pick an emoji, Enter to react (Esc to cancel)" is stuck. Will be fixed soonTM.
-- highlighted messages for when someone replies to you
-- Proper Slowmode support instead of "Failed to send message: 400 Bad Request Slow mode rate limited."
+- reply highlights are currently broken
 - Open a **feature request** issue for anything you want that is not here yet.
 
 ## License

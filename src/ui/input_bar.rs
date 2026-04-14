@@ -56,7 +56,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) -> Option<(u16, u16)> {
     } else if app.input.is_empty() {
         Some(if let Some(ref reply) = app.reply_to {
             if app.forward_mode {
-                format!("Forward from {} - optional note, Enter to send", reply.author_name)
+                format!(
+                    "Forward from {} - optional note, Enter to send",
+                    reply.author_name
+                )
             } else {
                 format!("Replying to {}...", reply.author_name)
             }
@@ -122,9 +125,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) -> Option<(u16, u16)> {
         let max_chars = 2000;
         let count_str = format!(" {char_count}/{max_chars} ");
         let count_style = if char_count > max_chars {
-            Style::default().fg(crate::ui::theme::DANGER).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(crate::ui::theme::DANGER)
+                .add_modifier(Modifier::BOLD)
         } else if char_count > max_chars - 100 {
-            Style::default().fg(ratatui::style::Color::Yellow).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(ratatui::style::Color::Yellow)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(crate::ui::theme::TEXT_MUTED)
         };
@@ -163,7 +170,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) -> Option<(u16, u16)> {
 
     if focused && can_type && !app.input.is_empty() {
         let inner_w = area.width.saturating_sub(2).max(1);
-        let (col, row) = input_word_wrap::eol_cursor_col_row(&app.input, inner_w, input_span_style());
+        let (col, row) =
+            input_word_wrap::eol_cursor_col_row(&app.input, inner_w, input_span_style());
         let max_x = area.x + area.width.saturating_sub(2);
         let x = (area.x + 1 + col).min(max_x);
         let y = area.y + 1 + row;

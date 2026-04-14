@@ -56,7 +56,17 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         ("12-hour", "AM / PM")
     };
-
+    let typing_on = app.ui_settings.show_typing_indicators;
+    let typing_primary = if typing_on {
+        ("On", "Show activity in the current channel")
+    } else {
+        ("Off", "Hide activity in the current channel")
+    };
+    let typing_alt = if typing_on {
+        ("Off", "Hide activity in the current channel")
+    } else {
+        ("On", "Show activity in the current channel")
+    };
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(vec![
         Span::styled("  ", text),
@@ -77,7 +87,18 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
         Span::styled("  ", text),
-        Span::styled("▸ ", accent),
+        Span::styled(
+            if app.settings_cursor == 0 {
+                "▸ "
+            } else {
+                "  "
+            },
+            if app.settings_cursor == 0 {
+                accent
+            } else {
+                muted
+            },
+        ),
         Span::styled(
             format!("{}  ·  {}", clock_primary.0, clock_primary.1),
             panel.add_modifier(Modifier::BOLD),
@@ -87,7 +108,32 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled("    ", text),
         Span::styled(format!("{}  ·  {}", clock_alt.0, clock_alt.1), muted),
     ]));
-
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![Span::styled("  Typing indicators", dim)]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("  ", text),
+        Span::styled(
+            if app.settings_cursor == 1 {
+                "▸ "
+            } else {
+                "  "
+            },
+            if app.settings_cursor == 1 {
+                accent
+            } else {
+                muted
+            },
+        ),
+        Span::styled(
+            format!("{}  ·  {}", typing_primary.0, typing_primary.1),
+            panel.add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("    ", text),
+        Span::styled(format!("{}  ·  {}", typing_alt.0, typing_alt.1), muted),
+    ]));
     let block = Block::default()
         .title(Line::from(Span::styled(" Settings ", accent)))
         .borders(Borders::ALL)
@@ -101,7 +147,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(paragraph, content);
 
     let hint = Paragraph::new(Line::from(vec![Span::styled(
-        "Space / Enter  toggle  ·  Esc / q  close",
+        "↑/↓ move  ·  Space / Enter toggle  ·  Esc / q close",
         muted,
     )]))
     .alignment(Alignment::Center);
