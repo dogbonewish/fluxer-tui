@@ -13,6 +13,7 @@ pub struct UiSettings {
     legacy_image_display: Option<String>,
     #[serde(default = "default_true")]
     pub show_typing_indicators: bool,
+    pub performance_mode: bool,
 }
 
 const fn default_true() -> bool {
@@ -25,6 +26,7 @@ impl Default for UiSettings {
             clock_12h: false,
             legacy_image_display: None,
             show_typing_indicators: true,
+            performance_mode: false,
         }
     }
 }

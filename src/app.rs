@@ -391,7 +391,7 @@ impl App {
         app
     }
 
-    pub const UI_SETTINGS_LAST_ROW: usize = 1;
+    pub const UI_SETTINGS_LAST_ROW: usize = 2;
     pub const SERVER_NOTIFICATION_LAST_ROW: usize = 5;
     pub const HISTORY_AUTOLOAD_THRESHOLD_ROWS: u16 = 3;
     pub const TRANSIENT_STATUS_DURATION: Duration = Duration::from_millis(1800);
@@ -657,6 +657,9 @@ impl App {
             }
             1 => {
                 self.ui_settings.show_typing_indicators = !self.ui_settings.show_typing_indicators;
+            }
+            2 => {
+                self.ui_settings.performance_mode = !self.ui_settings.performance_mode;
             }
             _ => {}
         }
@@ -1550,7 +1553,7 @@ impl App {
     }
 
     pub fn others_typing_phrase(&self) -> Option<String> {
-        if !self.ui_settings.show_typing_indicators {
+        if !self.ui_settings.show_typing_indicators || self.ui_settings.performance_mode {
             return None;
         }
         let ch = self.active_channel_id()?;
@@ -1562,7 +1565,7 @@ impl App {
     }
 
     pub fn others_typing_anim_active(&self) -> bool {
-        if !self.ui_settings.show_typing_indicators {
+        if !self.ui_settings.show_typing_indicators || self.ui_settings.performance_mode {
             return false;
         }
         self.active_channel_id()

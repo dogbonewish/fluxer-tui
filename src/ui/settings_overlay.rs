@@ -67,6 +67,17 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         ("On", "Show activity in the current channel")
     };
+    let perf_on = app.ui_settings.performance_mode;
+    let perf_primary = if perf_on {
+        ("On", "Fast typing, skips some UI features")
+    } else {
+        ("Off", "Full feature set")
+    };
+    let perf_alt = if perf_on {
+        ("Off", "Full feature set")
+    } else {
+        ("On", "Fast typing, skips some UI features")
+    };
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(vec![
         Span::styled("  ", text),
@@ -133,6 +144,32 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     lines.push(Line::from(vec![
         Span::styled("    ", text),
         Span::styled(format!("{}  ·  {}", typing_alt.0, typing_alt.1), muted),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![Span::styled("  Performance Mode (Low Spec)", dim)]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("  ", text),
+        Span::styled(
+            if app.settings_cursor == 2 {
+                "▸ "
+            } else {
+                "  "
+            },
+            if app.settings_cursor == 2 {
+                accent
+            } else {
+                muted
+            },
+        ),
+        Span::styled(
+            format!("{}  ·  {}", perf_primary.0, perf_primary.1),
+            panel.add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("    ", text),
+        Span::styled(format!("{}  ·  {}", perf_alt.0, perf_alt.1), muted),
     ]));
     let block = Block::default()
         .title(Line::from(Span::styled(" Settings ", accent)))

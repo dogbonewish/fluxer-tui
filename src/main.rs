@@ -140,11 +140,15 @@ async fn main() -> Result<()> {
     app.image_picker = ratatui_image::picker::Picker::from_query_stdio().ok();
     let mut reader = EventStream::new();
     let mut tick = interval(Duration::from_millis(100));
+    let mut needs_redraw = true;
 
     loop {
-        if let Err(e) = terminal.draw(|frame| ui::draw(frame, &mut app)) {
-            eprintln!("fluxer-tui: terminal draw failed: {e}");
-            break;
+        if needs_redraw {
+            if let Err(e) = terminal.draw(|frame| ui::draw(frame, &mut app)) {
+                eprintln!("fluxer-tui: terminal draw failed: {e}");
+                break;
+            }
+            needs_redraw = false;
         }
 
         match app.image_preview.as_mut() {
@@ -165,6 +169,7 @@ async fn main() -> Result<()> {
 
         tokio::select! {
             maybe_event = reader.next() => {
+                needs_redraw = true;
                 if let Some(Ok(ev)) = maybe_event {
                     match ev {
                         Event::Key(key) if key.kind == KeyEventKind::Press => {
@@ -198,6 +203,7 @@ async fn main() -> Result<()> {
                 }
             }
             Some(event) = event_rx.recv() => {
+                needs_redraw = true;
                 let effects = apply_event(&mut app, event, &event_tx);
                 if let Some(token) = effects.persist_token {
                     config.token = Some(token);
@@ -211,18 +217,35 @@ async fn main() -> Result<()> {
                 ensure_lazy_guild_subscription(&mut app, &gateway_cmd_tx);
             }
             _ = tick.tick() => {
-                app.advance_image_preview_animation(Duration::from_millis(100));
+                if matches!(app.image_preview, Some(ImagePreviewState::ReadyAnimatedGif { .. })) {
+                    app.advance_image_preview_animation(Duration::from_millis(100));
+                    needs_redraw = true;
+                }
+                let t_len_prev = app.typing_users.values().map(|m| m.len()).sum::<usize>();
                 app.prune_stale_typing();
+                if t_len_prev != app.typing_users.values().map(|m| m.len()).sum::<usize>() {
+                    needs_redraw = true;
+                }
+                
+                let s_prev = app.status_message.clone();
                 app.expire_status_if_needed();
+                if s_prev != app.status_message {
+                    needs_redraw = true;
+                }
+                
                 if app.others_typing_anim_active() {
                     app.input_bar_anim_slow = app.input_bar_anim_slow.saturating_add(1);
                     if app.input_bar_anim_slow >= 2 {
                         app.input_bar_anim_slow = 0;
                         app.input_bar_anim_phase = (app.input_bar_anim_phase + 1) % 4;
+                        needs_redraw = true;
                     }
                 } else {
                     app.input_bar_anim_slow = 0;
-                    app.input_bar_anim_phase = 0;
+                    if app.input_bar_anim_phase != 0 {
+                        app.input_bar_anim_phase = 0;
+                        needs_redraw = true;
+                    }
                 }
                 schedule_needed_fetches(&mut app, authed_client.clone(), event_tx.clone());
                 ensure_lazy_guild_subscription(&mut app, &gateway_cmd_tx);
@@ -914,17 +937,23 @@ fn handle_key_event(
             }
             KeyCode::Backspace if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 delete_word_backward(&mut app.input);
-                app.sync_command_autocomplete();
+                if !app.ui_settings.performance_mode || app.command_autocomplete.is_some() {
+                    app.sync_command_autocomplete();
+                }
             }
             KeyCode::Char('h') | KeyCode::Char('H')
                 if key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
                 delete_word_backward(&mut app.input);
-                app.sync_command_autocomplete();
+                if !app.ui_settings.performance_mode || app.command_autocomplete.is_some() {
+                    app.sync_command_autocomplete();
+                }
             }
             KeyCode::Backspace => {
                 app.input.pop();
-                app.sync_command_autocomplete();
+                if !app.ui_settings.performance_mode || app.command_autocomplete.is_some() {
+                    app.sync_command_autocomplete();
+                }
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 app.dismiss_command_autocomplete();
@@ -947,7 +976,9 @@ fn handle_key_event(
                         app.set_status("Loading members for @mentions…");
                     }
                 }
-                app.sync_command_autocomplete();
+                if !app.ui_settings.performance_mode || app.command_autocomplete.is_some() {
+                    app.sync_command_autocomplete();
+                }
             }
             _ => {}
         }

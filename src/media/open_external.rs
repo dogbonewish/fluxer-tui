@@ -39,10 +39,7 @@ fn command_ok(name: &str, st: std::process::ExitStatus) -> io::Result<()> {
     if st.success() {
         Ok(())
     } else {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("{name} exited with {st}"),
-        ))
+        Err(io::Error::other(format!("{name} exited with {st}")))
     }
 }
 
